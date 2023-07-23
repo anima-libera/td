@@ -1,5 +1,5 @@
 [package]
-name = "linjaaj"
+name = "defend-the-caravan"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,4 +10,5 @@ env_logger = "0.10.0"
 image = "0.24.6"
 log = "0.4.19"
 pixels = "0.13.0"
+rand = "0.8.5"
 winit = "0.28.6"

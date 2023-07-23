@@ -134,6 +134,10 @@ impl Dimensions {
 		Dimensions { w: side, h: side }
 	}
 
+	pub fn area(self) -> usize {
+		self.w as usize * self.h as usize
+	}
+
 	pub fn contains(self, coords: Coords) -> bool {
 		0 <= coords.x && coords.x < self.w && 0 <= coords.y && coords.y < self.h
 	}
@@ -247,6 +251,33 @@ impl Rect {
 		Rect {
 			top_left: self.top_left - (margin, margin).into(),
 			dims: self.dims + (margin * 2, margin * 2).into(),
+		}
+	}
+}
+
+#[derive(Clone)]
+pub struct Grid<T> {
+	pub dims: Dimensions,
+	content: Vec<T>,
+}
+
+impl<T> Grid<T> {
+	pub fn new(dims: Dimensions, initializer: impl FnMut(Coords) -> T) -> Grid<T> {
+		Grid { dims, content: dims.iter().map(initializer).collect() }
+	}
+
+	pub fn get(&self, coords: Coords) -> Option<&T> {
+		if let Some(index) = self.dims.index_of_coords(coords) {
+			self.content.get(index)
+		} else {
+			None
+		}
+	}
+	pub fn get_mut(&mut self, coords: Coords) -> Option<&mut T> {
+		if let Some(index) = self.dims.index_of_coords(coords) {
+			self.content.get_mut(index)
+		} else {
+			None
 		}
 	}
 }
