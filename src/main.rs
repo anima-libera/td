@@ -3,74 +3,6 @@ mod renderer;
 use crate::coords::*;
 use crate::renderer::*;
 
-#[derive(Clone)]
-enum AllyType {
-	Mage,
-	Pyro,
-	Fighter,
-	Pink,
-	Green,
-	Chemist,
-	Medic,
-}
-#[derive(Clone)]
-enum EnemyType {
-	Blob,
-	Snake,
-	Monster,
-	Elec,
-	Ears,
-	Worm,
-	Orb,
-}
-#[derive(Clone)]
-enum NatureType {
-	Tree,
-	Grass,
-	Rock,
-}
-
-#[derive(Clone)]
-enum EntType {
-	Ally(AllyType),
-	Enemy(EnemyType),
-	Nature(NatureType),
-}
-
-impl EntType {
-	fn sprite_coords(&self) -> (i32, i32) {
-		match self {
-			EntType::Ally(AllyType::Mage) => (0, 0),
-			EntType::Ally(AllyType::Pyro) => (1, 0),
-			EntType::Ally(AllyType::Fighter) => (2, 0),
-			EntType::Ally(AllyType::Pink) => (3, 0),
-			EntType::Ally(AllyType::Green) => (4, 0),
-			EntType::Ally(AllyType::Chemist) => (5, 0),
-			EntType::Ally(AllyType::Medic) => (6, 0),
-			EntType::Enemy(EnemyType::Blob) => (0, 1),
-			EntType::Enemy(EnemyType::Snake) => (1, 1),
-			EntType::Enemy(EnemyType::Monster) => (2, 1),
-			EntType::Enemy(EnemyType::Elec) => (3, 1),
-			EntType::Enemy(EnemyType::Ears) => (4, 1),
-			EntType::Enemy(EnemyType::Worm) => (5, 1),
-			EntType::Enemy(EnemyType::Orb) => (6, 1),
-			EntType::Nature(NatureType::Tree) => (0, 3),
-			EntType::Nature(NatureType::Grass) => (1, 3),
-			EntType::Nature(NatureType::Rock) => (2, 3),
-		}
-	}
-}
-
-struct Life {
-	max: u32,
-	current: u32,
-}
-
-struct Ent {
-	type_: EntType,
-	life: Option<Life>,
-}
-
 fn main() {
 	env_logger::init();
 	let event_loop = winit::event_loop::EventLoop::new();
@@ -89,13 +21,6 @@ fn main() {
 	));
 
 	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
-
-	let mut line: Vec<Option<Ent>> = vec![];
-	for _i in 0..10 {
-		line.push(None);
-	}
-	line[0] = Some(Ent { life: None, type_: EntType::Ally(AllyType::Pink) });
-	line[9] = Some(Ent { life: None, type_: EntType::Enemy(EnemyType::Blob) });
 
 	let mut last_time = std::time::Instant::now();
 
