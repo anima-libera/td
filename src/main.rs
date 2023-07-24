@@ -234,6 +234,7 @@ impl Chunk {
 
 enum Action {
 	Move { obj: Obj, from: Coords, to: Coords },
+	CameraMoveX { from: f32, to: f32 },
 }
 
 struct Animation {
@@ -269,13 +270,15 @@ fn main() {
 	let left_path_y = rand::thread_rng().gen_range(1..9);
 	let mut map = Map { grid: Grid::of_size_zero(), right_path_y: left_path_y };
 
-	map.generate_chunk_on_the_right();
-	map.generate_chunk_on_the_right();
-	map.generate_chunk_on_the_right();
+	while map.grid.dims.w * 8 * 8 < renderer.dims().w {
+		map.generate_chunk_on_the_right();
+	}
 
 	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
 
 	let mut current_animation: Option<Animation> = None;
+
+	let mut camera_x = 0.0;
 
 	let mut last_time = std::time::Instant::now();
 
@@ -298,6 +301,10 @@ fn main() {
 			WindowEvent::Resized(new_size) => {
 				renderer.resized((*new_size).into());
 				window.request_redraw();
+
+				while map.grid.dims.w * 8 * 8 < renderer.dims().w {
+					map.generate_chunk_on_the_right();
+				}
 			},
 
 			WindowEvent::KeyboardInput {
@@ -308,12 +315,11 @@ fn main() {
 						..
 					},
 				..
-			} => {
+			} if current_animation.is_none() => {
 				for coords in map.grid.dims.iter() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
 						if let Ground::Path { forward, .. } = map.grid.get(coords).unwrap().ground {
 							let dst_coords = coords + forward;
-							assert!(current_animation.is_none());
 							current_animation = Some(Animation {
 								action: Action::Move {
 									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
@@ -326,6 +332,25 @@ fn main() {
 							break;
 						}
 					}
+				}
+			},
+
+			WindowEvent::KeyboardInput {
+				input:
+					KeyboardInput {
+						state: ElementState::Pressed,
+						virtual_keycode: Some(VirtualKeyCode::Return),
+						..
+					},
+				..
+			} if current_animation.is_none() => {
+				current_animation = Some(Animation {
+					action: Action::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
+					start: std::time::Instant::now(),
+					duration: std::time::Duration::from_secs_f32(0.1),
+				});
+				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
+					map.generate_chunk_on_the_right();
 				}
 			},
 
@@ -351,13 +376,26 @@ fn main() {
 			.draw_text_line(&mut renderer, &format!("fps: {fps}"), (0, 0).into())
 			.unwrap();
 
+			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
+			let map_left = -(camera_x * 8.0 * 8.0) as i32;
+
 			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
 
 			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
 				map.draw_tile_obj_at(&mut renderer, coords, dst);
 			}
 
@@ -368,22 +406,26 @@ fn main() {
 				if progress > 1.0 {
 					match current_animation.take().unwrap().action {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
+						Action::CameraMoveX { to, .. } => camera_x = to,
 					}
 				} else {
 					match &anim.action {
 						Action::Move { obj, from, to } => {
 							let interp_x = {
-								let from_x = 8 * 8 * from.x;
-								let to_x = 8 * 8 * to.x;
+								let from_x = map_left + 8 * 8 * from.x;
+								let to_x = map_left + 8 * 8 * to.x;
 								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
 							};
 							let interp_y = {
-								let from_y = 8 * 8 * from.y;
-								let to_y = 8 * 8 * to.y;
+								let from_y = map_top + 8 * 8 * from.y;
+								let to_y = map_top + 8 * 8 * to.y;
 								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
 							};
 							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
 							draw_obj(&mut renderer, obj, dst);
+						},
+						Action::CameraMoveX { from, to } => {
+							camera_x = linear_interpolation(progress, *from, *to);
 						},
 					}
 				}

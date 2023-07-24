@@ -26,24 +26,24 @@ fn char_sprite(ch: char) -> Result<Rect, CharSpriteError> {
 				Ordering::Greater => x += how_much_wider,
 			}
 		}
-		Ok(Rect::xywh(x, 128 - row_height, w, 5))
+		Ok(Rect::xywh(x, 256 - row_height, w, 5))
 	} else if ch.is_ascii_digit() {
 		// Second row from the bottom.
 		let x = (ch as i32 - '0' as i32) * 4;
-		Ok(Rect::xywh(x, 128 - row_height * 2, 3, 5))
+		Ok(Rect::xywh(x, 256 - row_height * 2, 3, 5))
 	} else if PUNCT_3.contains(ch) {
 		// Third row from the bottom, reserved for 3-pixel-wide special characters.
 		let index = PUNCT_3.chars().position(|c| c == ch).unwrap() as i32;
-		Ok(Rect::xywh(index * 4, 128 - row_height * 3, 3, 5))
+		Ok(Rect::xywh(index * 4, 256 - row_height * 3, 3, 5))
 	} else if PUNCT_1.contains(ch) {
 		// Beginning of the forth row from the bottom, for 1-pixel-wide special characters.
 		let index = PUNCT_1.chars().position(|c| c == ch).unwrap() as i32;
-		Ok(Rect::xywh(index * 2, 128 - row_height * 4, 1, 5))
+		Ok(Rect::xywh(index * 2, 256 - row_height * 4, 1, 5))
 	} else if PUNCT_2.contains(ch) {
 		// End of the forth row from the bottom, for 2-pixel-wide special characters.
 		let index = PUNCT_2.chars().position(|c| c == ch).unwrap() as i32;
 		let x = PUNCT_1.len() as i32 * 2 + index * 3;
-		Ok(Rect::xywh(x, 128 - row_height * 4, 2, 5))
+		Ok(Rect::xywh(x, 256 - row_height * 4, 2, 5))
 	} else if ch == ' ' || ch == '\n' {
 		Err(CharSpriteError::Whitespace(ch))
 	} else {
@@ -221,6 +221,10 @@ impl Renderer {
 			.resize_buffer(new_dims.w as u32, new_dims.h as u32)
 			.unwrap();
 		self.pix_buf_dims = new_dims;
+	}
+
+	pub fn dims(&self) -> Dimensions {
+		self.pix_buf_dims
 	}
 
 	/// Draw a rect from the spritesheet onto a rect in the pixel buffer.
