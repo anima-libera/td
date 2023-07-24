@@ -273,7 +273,7 @@ impl Renderer {
 		}
 	}
 
-	pub fn draw_rect_edge(&mut self, dst: Rect, color: Color) {
+	pub fn _draw_rect_edge(&mut self, dst: Rect, color: Color) {
 		let dst_inside = Rect {
 			top_left: dst.top_left + (2, 2).into(),
 			dims: dst.dims - (4, 4).into(),

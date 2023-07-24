@@ -15,8 +15,12 @@ impl Ground {
 	fn is_path(&self) -> bool {
 		matches!(self, Ground::Path { .. })
 	}
+	fn is_water(&self) -> bool {
+		matches!(self, Ground::Water)
+	}
 }
 
+#[derive(Clone)]
 struct Tile {
 	ground: Ground,
 }
@@ -24,10 +28,15 @@ impl Tile {
 	fn has_path(&self) -> bool {
 		self.ground.is_path()
 	}
+	fn has_water(&self) -> bool {
+		self.ground.is_water()
+	}
 }
 
 struct Map {
 	grid: Grid<Tile>,
+	/// The y coordinate of the path on the right of the generated area.
+	right_path_y: i32,
 }
 
 impl Map {
@@ -82,10 +91,33 @@ impl Map {
 				);
 			},
 			Ground::Water => {
-				let sprite = Rect::tile((6, 0).into(), 16);
+				let there_is_water_on_the_top =
+					if let Some(tile_on_the_top) = self.grid.get(coords + DxDy::from((0, -1))) {
+						tile_on_the_top.has_water()
+					} else {
+						true
+					};
+				let there_is_water_on_the_left =
+					if let Some(tile_on_the_left) = self.grid.get(coords + DxDy::from((-1, 0))) {
+						tile_on_the_left.has_water()
+					} else {
+						true
+					};
+				let sprite_coords_x = 6
+					+ if there_is_water_on_the_top { 0 } else { 1 }
+					+ if there_is_water_on_the_left { 0 } else { 2 };
+				let sprite = Rect::tile((sprite_coords_x, 0).into(), 16);
 				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			},
 		}
+	}
+
+	fn generate_chunk_on_the_right(&mut self) {
+		let chunk = Chunk::generate(self.right_path_y);
+		let grid = std::mem::replace(&mut self.grid, Grid::of_size_zero());
+		let grid = grid.add_to_right(chunk.grid);
+		self.grid = grid;
+		self.right_path_y = chunk.right_path_y;
 	}
 }
 
@@ -99,11 +131,20 @@ struct Chunk {
 
 impl Chunk {
 	fn generate(path_y: i32) -> Chunk {
-		let (grid, right_path_y) = 'try_new_path: loop {
+		let (mut grid, right_path_y) = 'try_new_path: loop {
+			// Initialize with only grass.
 			let mut grid = Grid::new((10, 10).into(), |_coords: Coords| Tile {
-				ground: Ground::Grass { visual_variant: rand::thread_rng().gen_range(0..4) },
+				ground: Ground::Grass {
+					visual_variant: if rand::thread_rng().gen_range(0..4) == 0 {
+						rand::thread_rng().gen_range(1..4)
+					} else {
+						0
+					},
+				},
 			});
 
+			// We generate the path by moving `cur_head` around randomly and drawing the path.
+			// If it doesn't work then we just try again until it works >w<.
 			let mut prev_head: Coords = (-1, path_y).into();
 			let mut cur_head: Coords = (0, path_y).into();
 			loop {
@@ -133,6 +174,28 @@ impl Chunk {
 			break (grid, cur_head.y);
 		};
 
+		// Generate some water.
+		while rand::thread_rng().gen_range(0..3) == 0 {
+			let mut coords = (
+				rand::thread_rng().gen_range(0..grid.dims.w),
+				rand::thread_rng().gen_range(0..grid.dims.h),
+			)
+				.into();
+			loop {
+				let tile = grid.get_mut(coords).unwrap();
+				if tile.has_path() || tile.has_water() || rand::thread_rng().gen_range(0..3) == 0 {
+					break;
+				}
+				tile.ground = Ground::Water;
+				let dxdy = DxDy::iter_4_directions()
+					.nth(rand::thread_rng().gen_range(0..4))
+					.unwrap();
+				if grid.get(coords + dxdy).is_some_and(|tile| !tile.has_path()) {
+					coords += dxdy;
+				}
+			}
+		}
+
 		Chunk { grid, right_path_y }
 	}
 }
@@ -143,6 +206,7 @@ fn main() {
 	let window = winit::window::WindowBuilder::new()
 		.with_title("Defend the caravan")
 		.with_inner_size(winit::dpi::PhysicalSize::new(800, 800))
+		.with_maximized(true)
 		.build(&event_loop)
 		.unwrap();
 
@@ -156,7 +220,14 @@ fn main() {
 
 	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
 
-	let mut map = Map { grid: Chunk::generate(rand::thread_rng().gen_range(1..9)).grid };
+	let mut map = Map {
+		grid: Grid::of_size_zero(),
+		right_path_y: rand::thread_rng().gen_range(1..9),
+	};
+
+	map.generate_chunk_on_the_right();
+	map.generate_chunk_on_the_right();
+	map.generate_chunk_on_the_right();
 
 	let mut last_time = std::time::Instant::now();
 

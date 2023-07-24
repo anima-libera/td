@@ -46,7 +46,7 @@ impl std::ops::SubAssign<DxDy> for Coords {
 }
 impl std::ops::Sub<Coords> for Coords {
 	type Output = DxDy;
-	fn sub(mut self, rhs: Coords) -> DxDy {
+	fn sub(self, rhs: Coords) -> DxDy {
 		DxDy { dx: self.x - rhs.x, dy: self.y - rhs.y }
 	}
 }
@@ -120,7 +120,7 @@ impl std::ops::Mul<f32> for CoordsF {
 	}
 }
 impl CoordsF {
-	pub fn as_dxdy(self) -> DxDy {
+	pub fn _as_dxdy(self) -> DxDy {
 		DxDy { dx: self.x.round() as i32, dy: self.y.round() as i32 }
 	}
 }
@@ -145,7 +145,7 @@ impl Dimensions {
 		Dimensions { w: side, h: side }
 	}
 
-	pub fn area(self) -> usize {
+	pub fn _area(self) -> usize {
 		self.w as usize * self.h as usize
 	}
 
@@ -258,7 +258,7 @@ impl Rect {
 		IterCoordsRect::with_rect(self)
 	}
 
-	pub fn add_margin(self, margin: i32) -> Rect {
+	pub fn _add_margin(self, margin: i32) -> Rect {
 		Rect {
 			top_left: self.top_left - DxDy::from((margin, margin)),
 			dims: self.dims + (margin * 2, margin * 2).into(),
@@ -273,6 +273,10 @@ pub struct Grid<T> {
 }
 
 impl<T> Grid<T> {
+	pub fn of_size_zero() -> Grid<T> {
+		Grid { dims: (0, 0).into(), content: vec![] }
+	}
+
 	pub fn new(dims: Dimensions, initializer: impl FnMut(Coords) -> T) -> Grid<T> {
 		Grid { dims, content: dims.iter().map(initializer).collect() }
 	}
@@ -289,6 +293,25 @@ impl<T> Grid<T> {
 			self.content.get_mut(index)
 		} else {
 			None
+		}
+	}
+}
+
+impl<T: Clone> Grid<T> {
+	pub fn add_to_right(self, rhs: Grid<T>) -> Grid<T> {
+		if self.dims.w == 0 && self.dims.h == 0 {
+			rhs
+		} else {
+			assert_eq!(self.dims.h, rhs.dims.h);
+			Grid::new((self.dims.w + rhs.dims.w, self.dims.h).into(), |coords| {
+				if coords.x < self.dims.w {
+					self.get(coords).unwrap().clone()
+				} else {
+					rhs.get(coords - DxDy::from((self.dims.w, 0)))
+						.unwrap()
+						.clone()
+				}
+			})
 		}
 	}
 }
