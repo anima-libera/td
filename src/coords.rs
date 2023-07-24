@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Coords {
 	pub x: i32,
 	pub y: i32,
@@ -44,11 +44,22 @@ impl std::ops::SubAssign<DxDy> for Coords {
 		self.y -= rhs.dy;
 	}
 }
+impl std::ops::Sub<Coords> for Coords {
+	type Output = DxDy;
+	fn sub(mut self, rhs: Coords) -> DxDy {
+		DxDy { dx: self.x - rhs.x, dy: self.y - rhs.y }
+	}
+}
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DxDy {
 	pub dx: i32,
 	pub dy: i32,
+}
+impl DxDy {
+	pub fn iter_4_directions() -> impl Iterator<Item = DxDy> {
+		[(0, -1).into(), (1, 0).into(), (0, 1).into(), (-1, 0).into()].into_iter()
+	}
 }
 impl From<(i32, i32)> for DxDy {
 	fn from((dx, dy): (i32, i32)) -> DxDy {
@@ -249,7 +260,7 @@ impl Rect {
 
 	pub fn add_margin(self, margin: i32) -> Rect {
 		Rect {
-			top_left: self.top_left - (margin, margin).into(),
+			top_left: self.top_left - DxDy::from((margin, margin)),
 			dims: self.dims + (margin * 2, margin * 2).into(),
 		}
 	}

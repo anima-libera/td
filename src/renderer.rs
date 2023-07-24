@@ -129,7 +129,16 @@ impl Font {
 			head.x += match char_sprite(ch) {
 				Ok(sprite) => {
 					let dst = Rect { top_left: head, dims: sprite.dims * self.size_factor };
-					renderer.draw_sprite(dst, sprite, false, Some(self.foreground));
+					renderer.draw_sprite(
+						dst,
+						sprite,
+						DrawSpriteEffects {
+							flip_horizontally: false,
+							flip_vertically: false,
+							flip_diagonally_id: false,
+							paint: Some(self.foreground),
+						},
+					);
 					dst.dims.w
 				},
 				Err(CharSpriteError::Whitespace(' ')) => self.space_width,
@@ -216,29 +225,33 @@ impl Renderer {
 
 	/// Draw a rect from the spritesheet onto a rect in the pixel buffer.
 	/// The `paint` argument, if some, will paint all the non-transparent pixels to the given color.
-	pub fn draw_sprite(
-		&mut self,
-		dst: Rect,
-		sprite: Rect,
-		flip_horizontally: bool,
-		paint: Option<Color>,
-	) {
+	pub fn draw_sprite(&mut self, dst: Rect, sprite: Rect, effects: DrawSpriteEffects) {
 		// `coords_dst_dims` is a pixel in the dst rect but with (0, 0) being the top left corner.
 		for coords_dst_dims in dst.dims.iter() {
 			// `(sx, sy)` is the pixel to read from the spritesheet.
-			let sx = if flip_horizontally {
-				(sprite.top_left.x + sprite.dims.w - 1 - coords_dst_dims.x * sprite.dims.w / dst.dims.w)
-					as u32
+			let (cddx, cddy) = if effects.flip_diagonally_id {
+				(coords_dst_dims.y, coords_dst_dims.x)
 			} else {
-				(sprite.top_left.x + coords_dst_dims.x * sprite.dims.w / dst.dims.w) as u32
+				(coords_dst_dims.x, coords_dst_dims.y)
 			};
-			let sy = (sprite.top_left.y + coords_dst_dims.y * sprite.dims.h / dst.dims.h) as u32;
+			let sx = if effects.flip_horizontally {
+				(sprite.top_left.x + sprite.dims.w - 1 - cddx * sprite.dims.w / dst.dims.w) as u32
+			} else {
+				(sprite.top_left.x + cddx * sprite.dims.w / dst.dims.w) as u32
+			};
+			let sy = if effects.flip_vertically {
+				(sprite.top_left.y + sprite.dims.h - 1 - cddy * sprite.dims.h / dst.dims.h) as u32
+			} else {
+				(sprite.top_left.y + cddy * sprite.dims.h / dst.dims.h) as u32
+			};
+
 			let color = self.spritesheet.get_pixel(sx, sy).0;
 			// Skip transparent pixels.
 			if color[3] == 0 {
 				continue;
 			}
-			let color = paint.map(Color::raw).unwrap_or(color);
+			let color = effects.paint.map(Color::raw).unwrap_or(color);
+
 			// `coords_pixel_buffer` is the pixel to write to in the pixel buffer,
 			// each of which is visited once.
 			let coords_pixel_buffer = coords_dst_dims + dst.top_left.into();
@@ -273,6 +286,23 @@ impl Renderer {
 					self.pix_buf.frame_mut()[pixel_bytes].copy_from_slice(&color.raw());
 				}
 			}
+		}
+	}
+}
+
+pub struct DrawSpriteEffects {
+	pub flip_horizontally: bool,
+	pub flip_vertically: bool,
+	pub flip_diagonally_id: bool,
+	pub paint: Option<Color>,
+}
+impl DrawSpriteEffects {
+	pub fn none() -> DrawSpriteEffects {
+		DrawSpriteEffects {
+			flip_horizontally: false,
+			flip_vertically: false,
+			flip_diagonally_id: false,
+			paint: None,
 		}
 	}
 }
