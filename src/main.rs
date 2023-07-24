@@ -124,13 +124,11 @@ impl Map {
 		}
 	}
 
-	fn draw_tile_obj_at(&self, renderer: &mut Renderer, coords: Coords, mut dst: Rect) {
+	fn draw_tile_obj_at(&self, renderer: &mut Renderer, coords: Coords, dst: Rect) {
 		match self.grid.get(coords).and_then(|tile| tile.obj.as_ref()) {
 			None => {},
-			Some(Obj::Caravan) => {
-				let sprite = Rect::tile((7, 2).into(), 16);
-				dst.top_left.y -= dst.dims.h * 3 / 16;
-				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			Some(obj) => {
+				draw_obj(renderer, obj, dst);
 			},
 		}
 	}
@@ -141,6 +139,16 @@ impl Map {
 		let grid = grid.add_to_right(chunk.grid);
 		self.grid = grid;
 		self.right_path_y = chunk.right_path_y;
+	}
+}
+
+fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
+	match obj {
+		Obj::Caravan => {
+			let sprite = Rect::tile((7, 2).into(), 16);
+			dst.top_left.y -= dst.dims.h * 3 / 16;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
 	}
 }
 
@@ -224,6 +232,20 @@ impl Chunk {
 	}
 }
 
+enum Action {
+	Move { obj: Obj, from: Coords, to: Coords },
+}
+
+struct Animation {
+	action: Action,
+	start: std::time::Instant,
+	duration: std::time::Duration,
+}
+
+fn linear_interpolation(progress: f32, value_start: f32, value_end: f32) -> f32 {
+	value_start + progress * (value_end - value_start)
+}
+
 fn main() {
 	env_logger::init();
 	let event_loop = winit::event_loop::EventLoop::new();
@@ -252,6 +274,8 @@ fn main() {
 	map.generate_chunk_on_the_right();
 
 	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
+
+	let mut current_animation: Option<Animation> = None;
 
 	let mut last_time = std::time::Instant::now();
 
@@ -289,8 +313,16 @@ fn main() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
 						if let Ground::Path { forward, .. } = map.grid.get(coords).unwrap().ground {
 							let dst_coords = coords + forward;
-							map.grid.get_mut(dst_coords).unwrap().obj =
-								map.grid.get_mut(coords).unwrap().obj.take();
+							assert!(current_animation.is_none());
+							current_animation = Some(Animation {
+								action: Action::Move {
+									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+									from: coords,
+									to: dst_coords,
+								},
+								start: std::time::Instant::now(),
+								duration: std::time::Duration::from_secs_f32(0.1),
+							});
 							break;
 						}
 					}
@@ -323,9 +355,38 @@ fn main() {
 				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
+
 			for coords in map.grid.dims.iter() {
 				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
 				map.draw_tile_obj_at(&mut renderer, coords, dst);
+			}
+
+			if let Some(anim) = &current_animation {
+				let progress = std::time::Instant::now()
+					.duration_since(anim.start)
+					.as_secs_f32() / anim.duration.as_secs_f32();
+				if progress > 1.0 {
+					match current_animation.take().unwrap().action {
+						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
+					}
+				} else {
+					match &anim.action {
+						Action::Move { obj, from, to } => {
+							let interp_x = {
+								let from_x = 8 * 8 * from.x;
+								let to_x = 8 * 8 * to.x;
+								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
+							};
+							let interp_y = {
+								let from_y = 8 * 8 * from.y;
+								let to_y = 8 * 8 * to.y;
+								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
+							};
+							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							draw_obj(&mut renderer, obj, dst);
+						},
+					}
+				}
 			}
 
 			window.request_redraw();
