@@ -21,8 +21,14 @@ impl Ground {
 }
 
 #[derive(Clone)]
+enum Obj {
+	Caravan,
+}
+
+#[derive(Clone)]
 struct Tile {
 	ground: Ground,
+	obj: Option<Obj>,
 }
 impl Tile {
 	fn has_path(&self) -> bool {
@@ -30,6 +36,12 @@ impl Tile {
 	}
 	fn has_water(&self) -> bool {
 		self.ground.is_water()
+	}
+	fn has_caravan(&self) -> bool {
+		self
+			.obj
+			.as_ref()
+			.is_some_and(|obj| matches!(obj, Obj::Caravan))
 	}
 }
 
@@ -112,6 +124,17 @@ impl Map {
 		}
 	}
 
+	fn draw_tile_obj_at(&self, renderer: &mut Renderer, coords: Coords, mut dst: Rect) {
+		match self.grid.get(coords).and_then(|tile| tile.obj.as_ref()) {
+			None => {},
+			Some(Obj::Caravan) => {
+				let sprite = Rect::tile((7, 2).into(), 16);
+				dst.top_left.y -= dst.dims.h * 3 / 16;
+				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			},
+		}
+	}
+
 	fn generate_chunk_on_the_right(&mut self) {
 		let chunk = Chunk::generate(self.right_path_y);
 		let grid = std::mem::replace(&mut self.grid, Grid::of_size_zero());
@@ -141,6 +164,7 @@ impl Chunk {
 						0
 					},
 				},
+				obj: None,
 			});
 
 			// We generate the path by moving `cur_head` around randomly and drawing the path.
@@ -220,14 +244,14 @@ fn main() {
 
 	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
 
-	let mut map = Map {
-		grid: Grid::of_size_zero(),
-		right_path_y: rand::thread_rng().gen_range(1..9),
-	};
+	let left_path_y = rand::thread_rng().gen_range(1..9);
+	let mut map = Map { grid: Grid::of_size_zero(), right_path_y: left_path_y };
 
 	map.generate_chunk_on_the_right();
 	map.generate_chunk_on_the_right();
 	map.generate_chunk_on_the_right();
+
+	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
 
 	let mut last_time = std::time::Instant::now();
 
@@ -250,6 +274,27 @@ fn main() {
 			WindowEvent::Resized(new_size) => {
 				renderer.resized((*new_size).into());
 				window.request_redraw();
+			},
+
+			WindowEvent::KeyboardInput {
+				input:
+					KeyboardInput {
+						state: ElementState::Pressed,
+						virtual_keycode: Some(VirtualKeyCode::Space),
+						..
+					},
+				..
+			} => {
+				for coords in map.grid.dims.iter() {
+					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
+						if let Ground::Path { forward, .. } = map.grid.get(coords).unwrap().ground {
+							let dst_coords = coords + forward;
+							map.grid.get_mut(dst_coords).unwrap().obj =
+								map.grid.get_mut(coords).unwrap().obj.take();
+							break;
+						}
+					}
+				}
 			},
 
 			_ => {},
@@ -277,6 +322,10 @@ fn main() {
 			for coords in map.grid.dims.iter() {
 				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
+			}
+			for coords in map.grid.dims.iter() {
+				let dst = Rect::xywh(8 * 8 * coords.x, 8 * 8 * coords.y, 8 * 8, 8 * 8);
+				map.draw_tile_obj_at(&mut renderer, coords, dst);
 			}
 
 			window.request_redraw();
