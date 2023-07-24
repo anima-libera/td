@@ -18,11 +18,16 @@ impl Ground {
 	fn is_water(&self) -> bool {
 		matches!(self, Ground::Water)
 	}
+	fn is_grass(&self) -> bool {
+		matches!(self, Ground::Grass { .. })
+	}
 }
 
 #[derive(Clone)]
 enum Obj {
 	Caravan,
+	Tree,
+	Crystal,
 }
 
 #[derive(Clone)]
@@ -42,6 +47,9 @@ impl Tile {
 			.obj
 			.as_ref()
 			.is_some_and(|obj| matches!(obj, Obj::Caravan))
+	}
+	fn is_empty_grass(&self) -> bool {
+		self.obj.is_none() && self.ground.is_grass()
 	}
 }
 
@@ -149,6 +157,24 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
+		Obj::Tree => {
+			let mut sprite = Rect::tile((4, 2).into(), 16);
+			sprite.top_left.y -= 16;
+			sprite.dims.h += 16;
+			dst.top_left.y -= 8 * 8;
+			dst.dims.h += 8 * 8;
+			dst.top_left.y -= 8 * 8 / 8;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
+		Obj::Crystal => {
+			let mut sprite = Rect::tile((3, 2).into(), 16);
+			sprite.top_left.y -= 16;
+			sprite.dims.h += 16;
+			dst.top_left.y -= 8 * 8;
+			dst.dims.h += 8 * 8;
+			dst.top_left.y -= 8 * 8 / 8;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
 	}
 }
 
@@ -228,6 +254,38 @@ impl Chunk {
 			}
 		}
 
+		// Generate some trees.
+		let dims = grid.dims;
+		for coords in grid.dims.iter() {
+			let tile = grid.get_mut(coords).unwrap();
+			if tile.is_empty_grass() {
+				let tree_probability = if coords.y == 0 || coords.y == dims.h - 1 {
+					0.3
+				} else {
+					0.05
+				};
+				if rand::thread_rng().gen_range(0.0..1.0) < tree_probability {
+					tile.obj = Some(Obj::Tree);
+				}
+			}
+		}
+
+		// Generate some crystals.
+		let dims = grid.dims;
+		for coords in grid.dims.iter() {
+			let tile = grid.get_mut(coords).unwrap();
+			if tile.is_empty_grass() {
+				let crystal_probability = if coords.y == 1 || coords.y == dims.h - 2 {
+					0.03
+				} else {
+					0.006
+				};
+				if rand::thread_rng().gen_range(0.0..1.0) < crystal_probability {
+					tile.obj = Some(Obj::Crystal);
+				}
+			}
+		}
+
 		Chunk { grid, right_path_y }
 	}
 }
@@ -302,7 +360,7 @@ fn main() {
 				renderer.resized((*new_size).into());
 				window.request_redraw();
 
-				while map.grid.dims.w * 8 * 8 < renderer.dims().w {
+				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
 					map.generate_chunk_on_the_right();
 				}
 			},
@@ -327,7 +385,7 @@ fn main() {
 									to: dst_coords,
 								},
 								start: std::time::Instant::now(),
-								duration: std::time::Duration::from_secs_f32(0.1),
+								duration: std::time::Duration::from_secs_f32(0.05),
 							});
 							break;
 						}
@@ -347,7 +405,7 @@ fn main() {
 				current_animation = Some(Animation {
 					action: Action::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
 					start: std::time::Instant::now(),
-					duration: std::time::Duration::from_secs_f32(0.1),
+					duration: std::time::Duration::from_secs_f32(0.05),
 				});
 				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
 					map.generate_chunk_on_the_right();
@@ -386,6 +444,9 @@ fn main() {
 					8 * 8,
 					8 * 8,
 				);
+				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+					continue;
+				}
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
 
@@ -396,6 +457,9 @@ fn main() {
 					8 * 8,
 					8 * 8,
 				);
+				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+					continue;
+				}
 				map.draw_tile_obj_at(&mut renderer, coords, dst);
 			}
 
