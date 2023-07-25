@@ -28,6 +28,8 @@ enum Obj {
 	Caravan,
 	Tree,
 	Crystal,
+	EnemyBasic { can_play: bool },
+	TowerBasic { can_play: bool },
 }
 
 #[derive(Clone)]
@@ -175,6 +177,16 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
+		Obj::EnemyBasic { .. } => {
+			let sprite = Rect::tile((4, 8).into(), 16);
+			dst.top_left.y -= dst.dims.h * 3 / 16;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
+		Obj::TowerBasic { .. } => {
+			let sprite = Rect::tile((8, 4).into(), 16);
+			dst.top_left.y -= dst.dims.h * 3 / 16;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
 	}
 }
 
@@ -286,6 +298,17 @@ impl Chunk {
 			}
 		}
 
+		// Generate some enemies.
+		for coords in grid.dims.iter() {
+			let tile = grid.get_mut(coords).unwrap();
+			if tile.has_path() {
+				let enemy_probability = 0.1;
+				if rand::thread_rng().gen_range(0.0..1.0) < enemy_probability {
+					tile.obj = Some(Obj::EnemyBasic { can_play: false });
+				}
+			}
+		}
+
 		Chunk { grid, right_path_y }
 	}
 }
@@ -293,6 +316,7 @@ impl Chunk {
 enum Action {
 	Move { obj: Obj, from: Coords, to: Coords },
 	CameraMoveX { from: f32, to: f32 },
+	Appear { obj: Obj, to: Coords },
 }
 
 struct Animation {
@@ -334,9 +358,22 @@ fn main() {
 
 	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
 
+	#[derive(PartialEq, Eq)]
+	enum Phase {
+		Player,
+		Enemy,
+		Tower,
+	}
+	let mut phase = Phase::Player;
+
+	let mut end_player_phase_after_animation = false;
 	let mut current_animation: Option<Animation> = None;
 
 	let mut camera_x = 0.0;
+
+	let mut cursor_position = Coords::from((0, 0));
+	let mut hovered_tile_coords: Option<Coords> = None;
+	let mut selected_tile_coords: Option<Coords> = None;
 
 	let mut last_time = std::time::Instant::now();
 
@@ -365,6 +402,54 @@ fn main() {
 				}
 			},
 
+			WindowEvent::CursorMoved { position, .. } => {
+				cursor_position = (position.x.floor() as i32, position.y.floor() as i32).into();
+
+				let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
+				let map_left = -(camera_x * 8.0 * 8.0) as i32;
+				let coords = Coords::from((
+					((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
+					((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
+				));
+				if map.grid.dims.contains(coords) {
+					hovered_tile_coords = Some(coords);
+				} else {
+					hovered_tile_coords = None;
+				}
+			},
+
+			WindowEvent::CursorLeft { .. } => {
+				hovered_tile_coords = None;
+			},
+
+			WindowEvent::MouseInput {
+				state: ElementState::Pressed,
+				button: MouseButton::Left,
+				..
+			} => {
+				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
+					current_animation = Some(Animation {
+						action: Action::Appear {
+							obj: Obj::TowerBasic { can_play: false },
+							to: selected_tile_coords.unwrap(),
+						},
+						start: std::time::Instant::now(),
+						duration: std::time::Duration::from_secs_f32(0.05),
+					});
+					end_player_phase_after_animation = true;
+				} else {
+					selected_tile_coords = hovered_tile_coords;
+				}
+			},
+
+			WindowEvent::MouseInput {
+				state: ElementState::Pressed,
+				button: MouseButton::Right,
+				..
+			} => {
+				selected_tile_coords = None;
+			},
+
 			WindowEvent::KeyboardInput {
 				input:
 					KeyboardInput {
@@ -373,7 +458,7 @@ fn main() {
 						..
 					},
 				..
-			} if current_animation.is_none() => {
+			} if current_animation.is_none() && phase == Phase::Player => {
 				for coords in map.grid.dims.iter() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
 						if let Ground::Path { forward, .. } = map.grid.get(coords).unwrap().ground {
@@ -387,6 +472,7 @@ fn main() {
 								start: std::time::Instant::now(),
 								duration: std::time::Duration::from_secs_f32(0.05),
 							});
+							end_player_phase_after_animation = true;
 							break;
 						}
 					}
@@ -401,7 +487,7 @@ fn main() {
 						..
 					},
 				..
-			} if current_animation.is_none() => {
+			} if current_animation.is_none() && phase == Phase::Player => {
 				current_animation = Some(Animation {
 					action: Action::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
 					start: std::time::Instant::now(),
@@ -410,6 +496,7 @@ fn main() {
 				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
 					map.generate_chunk_on_the_right();
 				}
+				end_player_phase_after_animation = true;
 			},
 
 			_ => {},
@@ -450,6 +537,25 @@ fn main() {
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
 
+			if let Some(coords) = hovered_tile_coords {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
+			}
+			if let Some(coords) = selected_tile_coords {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 255, 80));
+			}
+
 			for coords in map.grid.dims.iter() {
 				let dst = Rect::xywh(
 					map_left + 8 * 8 * coords.x,
@@ -468,9 +574,22 @@ fn main() {
 					.duration_since(anim.start)
 					.as_secs_f32() / anim.duration.as_secs_f32();
 				if progress > 1.0 {
+					// The current animation is finished.
 					match current_animation.take().unwrap().action {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::CameraMoveX { to, .. } => camera_x = to,
+						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
+					}
+					if end_player_phase_after_animation {
+						end_player_phase_after_animation = false;
+						phase = Phase::Enemy;
+						for coords in map.grid.dims.iter() {
+							if let Some(Obj::EnemyBasic { ref mut can_play }) =
+								map.grid.get_mut(coords).unwrap().obj
+							{
+								*can_play = true;
+							}
+						}
 					}
 				} else {
 					match &anim.action {
@@ -490,7 +609,86 @@ fn main() {
 						},
 						Action::CameraMoveX { from, to } => {
 							camera_x = linear_interpolation(progress, *from, *to);
+
+							let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
+							let map_left = -(camera_x * 8.0 * 8.0) as i32;
+							let coords = Coords::from((
+								((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
+								((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
+							));
+							if map.grid.dims.contains(coords) {
+								hovered_tile_coords = Some(coords);
+							} else {
+								hovered_tile_coords = None;
+							}
 						},
+						Action::Appear { obj, to } => {
+							let mut dst = Rect::xywh(
+								map_left + 8 * 8 * to.x,
+								map_top + 8 * 8 * to.y,
+								8 * 8,
+								8 * 8,
+							);
+							dst.top_left.x += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.w = ((8 * 8) as f32 * progress) as i32;
+							dst.top_left.y += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
+							draw_obj(&mut renderer, obj, dst);
+						},
+					}
+				}
+			} else {
+				// There might be something to do now.
+				if phase == Phase::Enemy {
+					let mut found_an_enemy_to_make_play = false;
+					for coords in map.grid.dims.iter() {
+						let tile = map.grid.get_mut(coords).unwrap();
+						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true }) = tile.obj {
+							*can_play = false;
+							let backward = if let Ground::Path { backward, .. } = tile.ground {
+								backward
+							} else {
+								panic!("enemy not on a path")
+							};
+							let dst_coords = coords + backward;
+							current_animation = Some(Animation {
+								action: Action::Move {
+									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+									from: coords,
+									to: dst_coords,
+								},
+								start: std::time::Instant::now(),
+								duration: std::time::Duration::from_secs_f32(0.05),
+							});
+							found_an_enemy_to_make_play = true;
+							break;
+						}
+					}
+					if !found_an_enemy_to_make_play {
+						phase = Phase::Tower;
+						for coords in map.grid.dims.iter() {
+							if let Some(Obj::TowerBasic { ref mut can_play }) =
+								map.grid.get_mut(coords).unwrap().obj
+							{
+								*can_play = true;
+							}
+						}
+					}
+				} else if phase == Phase::Tower {
+					let mut found_an_tower_to_make_play = false;
+					for coords in map.grid.dims.iter() {
+						let tile = map.grid.get_mut(coords).unwrap();
+						if let Some(Obj::TowerBasic { can_play: ref mut can_play @ true }) = tile.obj {
+							*can_play = false;
+
+							// TODO: make the tower try to shoot an enemy
+
+							found_an_tower_to_make_play = true;
+							break;
+						}
+					}
+					if !found_an_tower_to_make_play {
+						phase = Phase::Player;
 					}
 				}
 			}
