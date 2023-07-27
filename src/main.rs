@@ -28,6 +28,7 @@ impl Ground {
 enum Obj {
 	Caravan,
 	Tree,
+	Rock { variant: u32 },
 	Crystal,
 	EnemyBasic { can_play: bool, hp: i32 },
 	TowerBasic { can_play: bool },
@@ -189,6 +190,11 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
+		Obj::Rock { variant } => {
+			let sprite = Rect::tile((*variant as i32, 2).into(), 16);
+			dst.top_left.y -= dst.dims.h * 3 / 16;
+			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+		},
 		Obj::Crystal => {
 			let mut sprite = Rect::tile((3, 2).into(), 16);
 			sprite.top_left.y -= 16;
@@ -314,6 +320,17 @@ impl Chunk {
 				};
 				if rand::thread_rng().gen_range(0.0..1.0) < tree_probability {
 					tile.obj = Some(Obj::Tree);
+				}
+			}
+		}
+
+		// Generate some rocks.
+		for coords in grid.dims.iter() {
+			let tile = grid.get_mut(coords).unwrap();
+			if tile.is_empty_grass() {
+				let rock_probability = 0.05;
+				if rand::thread_rng().gen_range(0.0..1.0) < rock_probability {
+					tile.obj = Some(Obj::Rock { variant: rand::thread_rng().gen_range(0..3) });
 				}
 			}
 		}
