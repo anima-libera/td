@@ -51,6 +51,13 @@ impl std::ops::Sub<Coords> for Coords {
 	}
 }
 
+impl Coords {
+	/// Manhattan distance.
+	pub fn dist(self, rhs: Coords) -> i32 {
+		(self.x.abs_diff(rhs.x) + self.y.abs_diff(rhs.y)) as i32
+	}
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DxDy {
 	pub dx: i32,

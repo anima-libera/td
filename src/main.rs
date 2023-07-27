@@ -190,6 +190,11 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 	}
 }
 
+fn draw_shot(renderer: &mut Renderer, mut dst: Rect) {
+	let sprite = Rect::tile((8, 6).into(), 16);
+	renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+}
+
 /// A pice of world that can be generated independently.
 struct Chunk {
 	/// A 10x10 grid.
@@ -317,6 +322,7 @@ enum Action {
 	Move { obj: Obj, from: Coords, to: Coords },
 	CameraMoveX { from: f32, to: f32 },
 	Appear { obj: Obj, to: Coords },
+	Shoot { from: Coords, to: Coords },
 }
 
 struct Animation {
@@ -579,6 +585,7 @@ fn main() {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::CameraMoveX { to, .. } => camera_x = to,
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
+						Action::Shoot { to, .. } => map.grid.get_mut(to).unwrap().obj = None,
 					}
 					if end_player_phase_after_animation {
 						end_player_phase_after_animation = false;
@@ -635,6 +642,20 @@ fn main() {
 							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
 							draw_obj(&mut renderer, obj, dst);
 						},
+						Action::Shoot { from, to } => {
+							let interp_x = {
+								let from_x = map_left + 8 * 8 * from.x;
+								let to_x = map_left + 8 * 8 * to.x;
+								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
+							};
+							let interp_y = {
+								let from_y = map_top + 8 * 8 * from.y;
+								let to_y = map_top + 8 * 8 * to.y;
+								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
+							};
+							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							draw_shot(&mut renderer, dst);
+						},
 					}
 				}
 			} else {
@@ -681,7 +702,32 @@ fn main() {
 						if let Some(Obj::TowerBasic { can_play: ref mut can_play @ true }) = tile.obj {
 							*can_play = false;
 
-							// TODO: make the tower try to shoot an enemy
+							// Try to shoot an enemy
+							'try_to_shoot: for direction in DxDy::iter_4_directions() {
+								let mut view_coords = coords + direction;
+								loop {
+									if !map.grid.dims.contains(view_coords) {
+										break;
+									}
+									if let Some(obj) = &map.grid.get(view_coords).unwrap().obj {
+										if matches!(obj, Obj::EnemyBasic { .. }) {
+											// Shoot
+											let dist = coords.dist(view_coords);
+											current_animation = Some(Animation {
+												action: Action::Shoot { from: coords, to: view_coords },
+												start: std::time::Instant::now(),
+												duration: std::time::Duration::from_secs_f32(
+													0.05 * dist as f32,
+												),
+											});
+											break 'try_to_shoot;
+										} else {
+											break;
+										}
+									}
+									view_coords += direction;
+								}
+							}
 
 							found_an_tower_to_make_play = true;
 							break;
