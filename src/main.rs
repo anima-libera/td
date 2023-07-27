@@ -1,6 +1,7 @@
 mod coords;
 mod renderer;
 use rand::Rng;
+use rodio::Source;
 
 use crate::coords::*;
 use crate::renderer::*;
@@ -49,6 +50,12 @@ impl Tile {
 			.obj
 			.as_ref()
 			.is_some_and(|obj| matches!(obj, Obj::Caravan))
+	}
+	fn has_enemy(&self) -> bool {
+		self
+			.obj
+			.as_ref()
+			.is_some_and(|obj| matches!(obj, Obj::EnemyBasic { .. }))
 	}
 	fn is_empty_grass(&self) -> bool {
 		self.obj.is_none() && self.ground.is_grass()
@@ -379,11 +386,22 @@ fn main() {
 
 	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
 
+	let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+
 	let left_path_y = rand::thread_rng().gen_range(1..9);
 	let mut map = Map { grid: Grid::of_size_zero(), right_path_y: left_path_y };
 
 	while map.grid.dims.w * 8 * 8 < renderer.dims().w {
 		map.generate_chunk_on_the_right();
+	}
+
+	for x in 0..15 {
+		for y in 0..map.grid.dims.h {
+			let coords = (x, y).into();
+			if map.grid.get(coords).unwrap().has_enemy() {
+				map.grid.get_mut(coords).unwrap().obj = None;
+			}
+		}
 	}
 
 	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
@@ -456,9 +474,8 @@ fn main() {
 				state: ElementState::Pressed,
 				button: MouseButton::Left,
 				..
-			} =>
-			{
-				#[allow(clippy::unnecessary_unwrap)]
+			} => {
+				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is no tstable yet you nincompoop
 				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
 					current_animation = Some(Animation {
 						action: Action::Appear {
@@ -611,7 +628,19 @@ fn main() {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::CameraMoveX { to, .. } => camera_x = to,
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
-						Action::Shoot { to, .. } => map.damage_obj_at(to, 1),
+						Action::Shoot { to, .. } => {
+							map.damage_obj_at(to, 1);
+							stream_handle
+								.play_raw(
+									rodio::Decoder::new(std::io::BufReader::new(
+										std::fs::File::open("assets/sounds/hit01.wav").unwrap(),
+									))
+									.unwrap()
+									.convert_samples()
+									.amplify(0.4),
+								)
+								.unwrap();
+						},
 					}
 					if end_player_phase_after_animation {
 						end_player_phase_after_animation = false;
@@ -747,6 +776,16 @@ fn main() {
 													0.05 * dist as f32,
 												),
 											});
+											stream_handle
+												.play_raw(
+													rodio::Decoder::new(std::io::BufReader::new(
+														std::fs::File::open("assets/sounds/pew01.wav").unwrap(),
+													))
+													.unwrap()
+													.convert_samples()
+													.amplify(0.4),
+												)
+												.unwrap();
 											break 'try_to_shoot;
 										} else {
 											break;
