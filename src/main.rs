@@ -28,7 +28,7 @@ enum Obj {
 	Caravan,
 	Tree,
 	Crystal,
-	EnemyBasic { can_play: bool },
+	EnemyBasic { can_play: bool, hp: i32 },
 	TowerBasic { can_play: bool },
 }
 
@@ -143,6 +143,20 @@ impl Map {
 		}
 	}
 
+	fn damage_obj_at(&mut self, coords: Coords, damages: i32) {
+		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
+			None => false,
+			Some(Obj::EnemyBasic { ref mut hp, .. }) => {
+				*hp -= damages;
+				*hp <= 0
+			},
+			Some(_) => false,
+		};
+		if destroy {
+			self.grid.get_mut(coords).unwrap().obj = None;
+		}
+	}
+
 	fn generate_chunk_on_the_right(&mut self) {
 		let chunk = Chunk::generate(self.right_path_y);
 		let grid = std::mem::replace(&mut self.grid, Grid::of_size_zero());
@@ -177,10 +191,20 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
-		Obj::EnemyBasic { .. } => {
+		Obj::EnemyBasic { hp, .. } => {
 			let sprite = Rect::tile((4, 8).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			Font {
+				size_factor: 3,
+				horizontal_spacing: 2,
+				space_width: 7,
+				foreground: Color::WHITE,
+				background: Some(Color::BLACK),
+				margins: (3, 3).into(),
+			}
+			.draw_text_line(renderer, &format!("{hp}"), dst.top_left)
+			.unwrap();
 		},
 		Obj::TowerBasic { .. } => {
 			let sprite = Rect::tile((8, 4).into(), 16);
@@ -190,7 +214,7 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 	}
 }
 
-fn draw_shot(renderer: &mut Renderer, mut dst: Rect) {
+fn draw_shot(renderer: &mut Renderer, dst: Rect) {
 	let sprite = Rect::tile((8, 6).into(), 16);
 	renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 }
@@ -309,7 +333,7 @@ impl Chunk {
 			if tile.has_path() {
 				let enemy_probability = 0.1;
 				if rand::thread_rng().gen_range(0.0..1.0) < enemy_probability {
-					tile.obj = Some(Obj::EnemyBasic { can_play: false });
+					tile.obj = Some(Obj::EnemyBasic { can_play: false, hp: 6 });
 				}
 			}
 		}
@@ -432,7 +456,9 @@ fn main() {
 				state: ElementState::Pressed,
 				button: MouseButton::Left,
 				..
-			} => {
+			} =>
+			{
+				#[allow(clippy::unnecessary_unwrap)]
 				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
 					current_animation = Some(Animation {
 						action: Action::Appear {
@@ -585,13 +611,13 @@ fn main() {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::CameraMoveX { to, .. } => camera_x = to,
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
-						Action::Shoot { to, .. } => map.grid.get_mut(to).unwrap().obj = None,
+						Action::Shoot { to, .. } => map.damage_obj_at(to, 1),
 					}
 					if end_player_phase_after_animation {
 						end_player_phase_after_animation = false;
 						phase = Phase::Enemy;
 						for coords in map.grid.dims.iter() {
-							if let Some(Obj::EnemyBasic { ref mut can_play }) =
+							if let Some(Obj::EnemyBasic { ref mut can_play, .. }) =
 								map.grid.get_mut(coords).unwrap().obj
 							{
 								*can_play = true;
@@ -664,7 +690,8 @@ fn main() {
 					let mut found_an_enemy_to_make_play = false;
 					for coords in map.grid.dims.iter() {
 						let tile = map.grid.get_mut(coords).unwrap();
-						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true }) = tile.obj {
+						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true, .. }) = tile.obj
+						{
 							*can_play = false;
 							let backward = if let Ground::Path { backward, .. } = tile.ground {
 								backward
