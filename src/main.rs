@@ -79,20 +79,34 @@ mod rodio_wrapper {
 use crate::rodio_wrapper::*;
 
 #[derive(Clone)]
+struct Path {
+	forward: DxDy,
+	backward: DxDy,
+}
+
+#[derive(Clone)]
 enum Ground {
 	Grass { visual_variant: u32 },
-	Path { forward: DxDy, backward: DxDy },
+	Path(Path),
 	Water,
 }
 impl Ground {
 	fn is_path(&self) -> bool {
-		matches!(self, Ground::Path { .. })
+		matches!(self, Ground::Path(_))
 	}
 	fn is_water(&self) -> bool {
 		matches!(self, Ground::Water)
 	}
 	fn is_grass(&self) -> bool {
 		matches!(self, Ground::Grass { .. })
+	}
+
+	fn path(&self) -> Option<&Path> {
+		if let Ground::Path(path) = self {
+			Some(path)
+		} else {
+			None
+		}
 	}
 }
 
@@ -133,6 +147,10 @@ impl Tile {
 	fn is_empty_grass(&self) -> bool {
 		self.obj.is_none() && self.ground.is_grass()
 	}
+
+	fn path(&self) -> Option<&Path> {
+		self.ground.path()
+	}
 }
 
 struct Map {
@@ -150,7 +168,7 @@ impl Map {
 				let sprite = Rect::tile((visual_variant as i32, 0).into(), 16);
 				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			},
-			Ground::Path { forward, backward } => {
+			Ground::Path(Path { forward, backward }) => {
 				// For now we just have a sprite of a streight path and of a L-turn.
 				// By flipping them around various axes we can draw all the cases.
 				let sprite_straight = (4, 0);
@@ -191,12 +209,24 @@ impl Map {
 				);
 			},
 			Ground::Water => {
+				// Depending on weather there are water on some adjacent tiles, we render
+				// different variants of the base water sprite.
+				// This is done to give a sense of depth (the water level is thus
+				// percieved as a bit below ground level).
 				let there_is_water_on_the_top =
 					if let Some(tile_on_the_top) = self.grid.get(coords + DxDy::from((0, -1))) {
 						tile_on_the_top.has_water()
 					} else {
-						true
+						false
 					};
+				let there_is_nothing_on_the_top = self.grid.get(coords + DxDy::from((0, -1))).is_none();
+				let there_is_ground_on_the_top_left_corner = if let Some(tile_on_the_top_left_corner) =
+					self.grid.get(coords + DxDy::from((-1, -1)))
+				{
+					!tile_on_the_top_left_corner.has_water()
+				} else {
+					false
+				};
 				let there_is_water_on_the_left =
 					if let Some(tile_on_the_left) = self.grid.get(coords + DxDy::from((-1, 0))) {
 						tile_on_the_left.has_water()
@@ -204,8 +234,15 @@ impl Map {
 						true
 					};
 				let sprite_coords_x = 6
-					+ if there_is_water_on_the_top { 0 } else { 1 }
-					+ if there_is_water_on_the_left { 0 } else { 2 };
+					+ if there_is_nothing_on_the_top {
+						2
+					} else if there_is_water_on_the_top && there_is_ground_on_the_top_left_corner {
+						6
+					} else if there_is_water_on_the_top {
+						4
+					} else {
+						0
+					} + if there_is_water_on_the_left { 0 } else { 1 };
 				let sprite = Rect::tile((sprite_coords_x, 0).into(), 16);
 				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			},
@@ -334,7 +371,7 @@ impl Chunk {
 				if cur_head.x == grid.dims.w - 1 {
 					let backward = prev_head - cur_head;
 					grid.get_mut(cur_head).unwrap().ground =
-						Ground::Path { forward: (1, 0).into(), backward };
+						Ground::Path(Path { forward: (1, 0).into(), backward });
 					break;
 				}
 
@@ -345,7 +382,7 @@ impl Chunk {
 				{
 					let backward = prev_head - cur_head;
 					let forward = dxdy;
-					grid.get_mut(cur_head).unwrap().ground = Ground::Path { forward, backward };
+					grid.get_mut(cur_head).unwrap().ground = Ground::Path(Path { forward, backward });
 					prev_head = cur_head;
 					cur_head += dxdy;
 				} else {
@@ -592,8 +629,8 @@ fn main() {
 			} if current_animation.is_none() && phase == Phase::Player => {
 				for coords in map.grid.dims.iter() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
-						if let Ground::Path { forward, .. } = map.grid.get(coords).unwrap().ground {
-							let dst_coords = coords + forward;
+						if let Some(Path { forward, .. }) = map.grid.get(coords).unwrap().path() {
+							let dst_coords = coords + *forward;
 							current_animation = Some(Animation {
 								action: Action::Move {
 									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
@@ -795,8 +832,8 @@ fn main() {
 						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true, .. }) = tile.obj
 						{
 							*can_play = false;
-							let backward = if let Ground::Path { backward, .. } = tile.ground {
-								backward
+							let backward = if let Some(Path { backward, .. }) = tile.path() {
+								*backward
 							} else {
 								panic!("enemy not on a path")
 							};
