@@ -111,13 +111,27 @@ impl Ground {
 }
 
 #[derive(Clone)]
+struct AliveAnimation {
+	start: std::time::Instant,
+	duration: std::time::Duration,
+}
+
+#[derive(Clone)]
 enum Obj {
 	Caravan,
 	Tree,
-	Rock { visual_variant: u32 },
+	Rock {
+		visual_variant: u32,
+	},
 	Crystal,
-	EnemyBasic { can_play: bool, hp: i32 },
-	TowerBasic { can_play: bool },
+	EnemyBasic {
+		can_play: bool,
+		hp: i32,
+		alive_animation: Option<AliveAnimation>,
+	},
+	TowerBasic {
+		can_play: bool,
+	},
 }
 
 #[derive(Clone)]
@@ -312,9 +326,31 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
-		Obj::EnemyBasic { hp, .. } => {
+		Obj::EnemyBasic { hp, alive_animation, .. } => {
 			let sprite = Rect::tile((4, 8).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
+			let unsquished_dst = dst;
+			if let Some(anim) = alive_animation {
+				let progress = std::time::Instant::now()
+					.duration_since(anim.start)
+					.as_secs_f32() / anim.duration.as_secs_f32();
+				if progress < 1.0 {
+					let squish_x = 0.8;
+					let squish_y = 1.2;
+					let mut dst_squish = dst;
+					dst_squish.top_left.x += (dst.dims.w as f32 * (1.0 - squish_x) / 2.0) as i32;
+					dst_squish.dims.w -= (dst.dims.w as f32 * (1.0 - squish_x)) as i32;
+					dst_squish.top_left.y += (dst.dims.h as f32 * (1.0 - squish_y)) as i32;
+					dst_squish.dims.h -= (dst.dims.h as f32 * (1.0 - squish_y)) as i32;
+					//renderer.draw_rect_edge(dst_squish, Color::rgb_u8(255, 0, 0));
+					//renderer.draw_rect_edge(dst, Color::rgb_u8(0, 255, 0));
+					if progress < 0.5 {
+						dst = linear_interpolation_rect(progress * 2.0, dst, dst_squish);
+					} else {
+						dst = linear_interpolation_rect(progress * 2.0 - 1.0, dst_squish, dst);
+					}
+				}
+			}
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			Font {
 				size_factor: 3,
@@ -324,7 +360,7 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 				background: Some(Color::BLACK),
 				margins: (3, 3).into(),
 			}
-			.draw_text_line(renderer, &format!("{hp}"), dst.top_left)
+			.draw_text_line(renderer, &format!("{hp}"), unsquished_dst.top_left)
 			.unwrap();
 		},
 		Obj::TowerBasic { .. } => {
@@ -457,7 +493,7 @@ impl Chunk {
 			if tile.has_path() {
 				let enemy_probability = 0.1;
 				if rand_range(0.0..1.0) < enemy_probability {
-					tile.obj = Some(Obj::EnemyBasic { can_play: false, hp: 6 });
+					tile.obj = Some(Obj::EnemyBasic { can_play: false, hp: 6, alive_animation: None });
 				}
 			}
 		}
@@ -483,6 +519,27 @@ struct Animation {
 /// and inbetween it does a linear interpolation (no way !!!).
 fn linear_interpolation(progress: f32, value_start: f32, value_end: f32) -> f32 {
 	value_start + progress * (value_end - value_start)
+}
+
+fn linear_interpolation_rect(progress: f32, value_start: Rect, value_end: Rect) -> Rect {
+	Rect::xywh(
+		linear_interpolation(
+			progress,
+			value_start.top_left.x as f32,
+			value_end.top_left.x as f32,
+		)
+		.round() as i32,
+		linear_interpolation(
+			progress,
+			value_start.top_left.y as f32,
+			value_end.top_left.y as f32,
+		)
+		.round() as i32,
+		linear_interpolation(progress, value_start.dims.w as f32, value_end.dims.w as f32).round()
+			as i32,
+		linear_interpolation(progress, value_start.dims.h as f32, value_end.dims.h as f32).round()
+			as i32,
+	)
 }
 
 fn main() {
@@ -675,6 +732,29 @@ fn main() {
 			let dt = now.duration_since(last_time);
 			last_time = now;
 			let fps = 1.0 / dt.as_secs_f32();
+
+			// Enemy alive animations.
+			for coords in map.grid.dims.iter() {
+				if let Some(Obj::EnemyBasic { alive_animation, .. }) =
+					&mut map.grid.get_mut(coords).unwrap().obj
+				{
+					if let Some(anim) = alive_animation {
+						let progress = std::time::Instant::now()
+							.duration_since(anim.start)
+							.as_secs_f32() / anim.duration.as_secs_f32();
+						if progress > 10.0 {
+							// We wait until way too long after the end of the animation to remove it
+							// so that there is a kind of cooldown for the animation per enemy.
+							*alive_animation = None;
+						}
+					} else if rand_range(0.0..0.1) < 0.001 {
+						*alive_animation = Some(AliveAnimation {
+							start: std::time::Instant::now(),
+							duration: std::time::Duration::from_secs_f32(0.3),
+						});
+					}
+				}
+			}
 
 			renderer.clear();
 
