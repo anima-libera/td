@@ -1,14 +1,86 @@
 mod coords;
 mod renderer;
-use rand::Rng;
-use rodio::Source;
 
 use crate::coords::*;
 use crate::renderer::*;
 
+mod rand_wrapper {
+	use rand::distributions::uniform::{SampleRange, SampleUniform};
+
+	/// Just a wrapper around `rand::rng::Rng::gen_range`.
+	/// It gets a random value in the given range,
+	/// using the thread-local RNG given by `rand::thread_rng`.
+	pub fn rand_range<T, R>(range: R) -> T
+	where
+		T: SampleUniform,
+		R: SampleRange<T>,
+	{
+		use rand::{thread_rng, Rng};
+		thread_rng().gen_range(range)
+	}
+}
+use crate::rand_wrapper::*;
+
+mod rodio_wrapper {
+	use rodio::{Decoder, OutputStream, OutputStreamHandle, Source};
+	use std::io::{BufReader, Cursor};
+
+	/// Represent various sound effects embedded in the binary
+	/// that can be played by being passed to `AudioPlayer::play_sound_effect`.
+	#[derive(Clone, Copy)]
+	pub enum SoundEffect {
+		Pew,
+		Hit,
+	}
+
+	impl SoundEffect {
+		fn bytes(self) -> &'static [u8] {
+			match self {
+				SoundEffect::Pew => include_bytes!("../assets/sounds/pew01.wav").as_slice(),
+				SoundEffect::Hit => include_bytes!("../assets/sounds/hit01.wav").as_slice(),
+			}
+		}
+
+		fn volume(self) -> f32 {
+			match self {
+				SoundEffect::Pew => 0.4,
+				SoundEffect::Hit => 0.4,
+			}
+		}
+	}
+
+	/// Just a wrapper around whatever `rodio::OutputStream::try_default` returns.
+	pub struct AudioPlayer {
+		_stream: OutputStream,
+		stream_handle: OutputStreamHandle,
+	}
+
+	impl AudioPlayer {
+		pub fn new() -> AudioPlayer {
+			let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+			AudioPlayer { _stream, stream_handle }
+		}
+
+		pub fn play_sound_effect(&self, sound_effect: SoundEffect) {
+			// TODO: See if we can call `Decoder::new` only once per sound effect
+			// (in `AudioPlayer::new`) instead of here.
+			self
+				.stream_handle
+				.play_raw(
+					Decoder::new(BufReader::new(Cursor::new(sound_effect.bytes())))
+						.unwrap()
+						.convert_samples()
+						.amplify(sound_effect.volume()),
+				)
+				.unwrap();
+		}
+	}
+}
+use crate::rodio_wrapper::*;
+
 #[derive(Clone)]
 enum Ground {
-	Grass { visual_variant: u8 },
+	Grass { visual_variant: u32 },
 	Path { forward: DxDy, backward: DxDy },
 	Water,
 }
@@ -28,7 +100,7 @@ impl Ground {
 enum Obj {
 	Caravan,
 	Tree,
-	Rock { variant: u32 },
+	Rock { visual_variant: u32 },
 	Crystal,
 	EnemyBasic { can_play: bool, hp: i32 },
 	TowerBasic { can_play: bool },
@@ -74,39 +146,37 @@ impl Map {
 		let ground = self.grid.get(coords).unwrap().ground.clone();
 		match ground {
 			Ground::Grass { visual_variant } => {
+				assert!(visual_variant < 4);
 				let sprite = Rect::tile((visual_variant as i32, 0).into(), 16);
 				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			},
 			Ground::Path { forward, backward } => {
+				// For now we just have a sprite of a streight path and of a L-turn.
+				// By flipping them around various axes we can draw all the cases.
+				let sprite_straight = (4, 0);
+				let sprite_turn = (5, 0);
+				fn is_turn(forward: DxDy, backward: DxDy, a: DxDy, b: DxDy) -> bool {
+					(forward == a && backward == b) || (backward == a && forward == b)
+				}
 				let (sprite_coords, flip_horizontally, flip_vertically, flip_diagonally_id) =
 					if forward.dy == 0 && backward.dy == 0 {
-						// Horizontal
-						((4, 0), false, false, false)
+						(sprite_straight, false, false, false) // Horizontal
 					} else if forward.dx == 0 && backward.dx == 0 {
-						// Vertical
-						((4, 0), false, false, true)
-					} else if (forward == DxDy::from((0, -1)) && backward == DxDy::from((-1, 0)))
-						|| (backward == DxDy::from((0, -1)) && forward == DxDy::from((-1, 0)))
-					{
-						// From left to top
-						((5, 0), false, false, false)
-					} else if (forward == DxDy::from((0, 1)) && backward == DxDy::from((-1, 0)))
-						|| (backward == DxDy::from((0, 1)) && forward == DxDy::from((-1, 0)))
-					{
-						// From left to bottom
-						((5, 0), false, true, false)
-					} else if (forward == DxDy::from((0, -1)) && backward == DxDy::from((1, 0)))
-						|| (backward == DxDy::from((0, -1)) && forward == DxDy::from((1, 0)))
-					{
-						// From top to right
-						((5, 0), true, false, false)
-					} else if (forward == DxDy::from((0, 1)) && backward == DxDy::from((1, 0)))
-						|| (backward == DxDy::from((0, 1)) && forward == DxDy::from((1, 0)))
-					{
-						// From bottom to right
-						((5, 0), true, true, false)
+						(sprite_straight, false, false, true) // Vertical
+					} else if is_turn(forward, backward, DxDy::UP, DxDy::LEFT) {
+						(sprite_turn, false, false, false)
+					} else if is_turn(forward, backward, DxDy::DOWN, DxDy::LEFT) {
+						(sprite_turn, false, true, false)
+					} else if is_turn(forward, backward, DxDy::UP, DxDy::RIGHT) {
+						(sprite_turn, true, false, false)
+					} else if is_turn(forward, backward, DxDy::DOWN, DxDy::RIGHT) {
+						(sprite_turn, true, true, false)
 					} else {
-						unreachable!()
+						panic!(
+							"A path may has both its backward ({backward:?}) \
+							and its forward ({forward:?}) directions be the same, \
+							which doesn't make sense."
+						);
 					};
 				let sprite = Rect::tile(sprite_coords.into(), 16);
 				renderer.draw_sprite(
@@ -190,8 +260,9 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
-		Obj::Rock { variant } => {
-			let sprite = Rect::tile((*variant as i32, 2).into(), 16);
+		Obj::Rock { visual_variant } => {
+			assert!(*visual_variant < 3);
+			let sprite = Rect::tile((*visual_variant as i32, 2).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
@@ -246,8 +317,8 @@ impl Chunk {
 			// Initialize with only grass.
 			let mut grid = Grid::new((10, 10).into(), |_coords: Coords| Tile {
 				ground: Ground::Grass {
-					visual_variant: if rand::thread_rng().gen_range(0..4) == 0 {
-						rand::thread_rng().gen_range(1..4)
+					visual_variant: if rand_range(0..4) == 0 {
+						rand_range(1..4)
 					} else {
 						0
 					},
@@ -267,9 +338,7 @@ impl Chunk {
 					break;
 				}
 
-				let dxdy = DxDy::iter_4_directions()
-					.nth(rand::thread_rng().gen_range(0..4))
-					.unwrap();
+				let dxdy = DxDy::iter_4_directions().nth(rand_range(0..4)).unwrap();
 				if grid
 					.get(cur_head + dxdy)
 					.is_some_and(|tile| !tile.has_path())
@@ -287,21 +356,15 @@ impl Chunk {
 		};
 
 		// Generate some water.
-		while rand::thread_rng().gen_range(0..3) == 0 {
-			let mut coords = (
-				rand::thread_rng().gen_range(0..grid.dims.w),
-				rand::thread_rng().gen_range(0..grid.dims.h),
-			)
-				.into();
+		while rand_range(0..3) == 0 {
+			let mut coords = (rand_range(0..grid.dims.w), rand_range(0..grid.dims.h)).into();
 			loop {
 				let tile = grid.get_mut(coords).unwrap();
-				if tile.has_path() || tile.has_water() || rand::thread_rng().gen_range(0..3) == 0 {
+				if tile.has_path() || tile.has_water() || rand_range(0..3) == 0 {
 					break;
 				}
 				tile.ground = Ground::Water;
-				let dxdy = DxDy::iter_4_directions()
-					.nth(rand::thread_rng().gen_range(0..4))
-					.unwrap();
+				let dxdy = DxDy::iter_4_directions().nth(rand_range(0..4)).unwrap();
 				if grid.get(coords + dxdy).is_some_and(|tile| !tile.has_path()) {
 					coords += dxdy;
 				}
@@ -318,7 +381,7 @@ impl Chunk {
 				} else {
 					0.05
 				};
-				if rand::thread_rng().gen_range(0.0..1.0) < tree_probability {
+				if rand_range(0.0..1.0) < tree_probability {
 					tile.obj = Some(Obj::Tree);
 				}
 			}
@@ -329,8 +392,8 @@ impl Chunk {
 			let tile = grid.get_mut(coords).unwrap();
 			if tile.is_empty_grass() {
 				let rock_probability = 0.05;
-				if rand::thread_rng().gen_range(0.0..1.0) < rock_probability {
-					tile.obj = Some(Obj::Rock { variant: rand::thread_rng().gen_range(0..3) });
+				if rand_range(0.0..1.0) < rock_probability {
+					tile.obj = Some(Obj::Rock { visual_variant: rand_range(0..3) });
 				}
 			}
 		}
@@ -345,7 +408,7 @@ impl Chunk {
 				} else {
 					0.006
 				};
-				if rand::thread_rng().gen_range(0.0..1.0) < crystal_probability {
+				if rand_range(0.0..1.0) < crystal_probability {
 					tile.obj = Some(Obj::Crystal);
 				}
 			}
@@ -356,7 +419,7 @@ impl Chunk {
 			let tile = grid.get_mut(coords).unwrap();
 			if tile.has_path() {
 				let enemy_probability = 0.1;
-				if rand::thread_rng().gen_range(0.0..1.0) < enemy_probability {
+				if rand_range(0.0..1.0) < enemy_probability {
 					tile.obj = Some(Obj::EnemyBasic { can_play: false, hp: 6 });
 				}
 			}
@@ -379,6 +442,8 @@ struct Animation {
 	duration: std::time::Duration,
 }
 
+/// When `progress` is 0.0 it returns `value_start`, 1.0 returns `value_end`
+/// and inbetween it does a linear interpolation (no way !!!).
 fn linear_interpolation(progress: f32, value_start: f32, value_end: f32) -> f32 {
 	value_start + progress * (value_end - value_start)
 }
@@ -403,9 +468,9 @@ fn main() {
 
 	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
 
-	let (_stream, stream_handle) = rodio::OutputStream::try_default().unwrap();
+	let audio_player = AudioPlayer::new();
 
-	let left_path_y = rand::thread_rng().gen_range(1..9);
+	let left_path_y = rand_range(1..9);
 	let mut map = Map { grid: Grid::of_size_zero(), right_path_y: left_path_y };
 
 	while map.grid.dims.w * 8 * 8 < renderer.dims().w {
@@ -647,16 +712,7 @@ fn main() {
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::Shoot { to, .. } => {
 							map.damage_obj_at(to, 1);
-							stream_handle
-								.play_raw(
-									rodio::Decoder::new(std::io::BufReader::new(
-										std::fs::File::open("assets/sounds/hit01.wav").unwrap(),
-									))
-									.unwrap()
-									.convert_samples()
-									.amplify(0.4),
-								)
-								.unwrap();
+							audio_player.play_sound_effect(SoundEffect::Hit);
 						},
 					}
 					if end_player_phase_after_animation {
@@ -793,16 +849,7 @@ fn main() {
 													0.05 * dist as f32,
 												),
 											});
-											stream_handle
-												.play_raw(
-													rodio::Decoder::new(std::io::BufReader::new(
-														std::fs::File::open("assets/sounds/pew01.wav").unwrap(),
-													))
-													.unwrap()
-													.convert_samples()
-													.amplify(0.4),
-												)
-												.unwrap();
+											audio_player.play_sound_effect(SoundEffect::Pew);
 											break 'try_to_shoot;
 										} else {
 											break;

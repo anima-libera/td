@@ -58,14 +58,19 @@ impl Coords {
 	}
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct DxDy {
 	pub dx: i32,
 	pub dy: i32,
 }
 impl DxDy {
+	pub const UP: DxDy = DxDy { dx: 0, dy: -1 };
+	pub const RIGHT: DxDy = DxDy { dx: 1, dy: 0 };
+	pub const DOWN: DxDy = DxDy { dx: 0, dy: 1 };
+	pub const LEFT: DxDy = DxDy { dx: -1, dy: 0 };
+
 	pub fn iter_4_directions() -> impl Iterator<Item = DxDy> {
-		[(0, -1).into(), (1, 0).into(), (0, 1).into(), (-1, 0).into()].into_iter()
+		[DxDy::UP, DxDy::RIGHT, DxDy::DOWN, DxDy::LEFT].into_iter()
 	}
 }
 impl From<(i32, i32)> for DxDy {

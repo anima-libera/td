@@ -8,6 +8,7 @@ enum CharSpriteError {
 	Unsupported(char),
 }
 
+/// Returns the rect of the given character's sprite in the spritesheet.
 fn char_sprite(ch: char) -> Result<Rect, CharSpriteError> {
 	const PUNCT_1: &str = "|.:!";
 	const PUNCT_2: &str = ",;'[]()`";
