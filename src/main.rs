@@ -684,6 +684,7 @@ fn main() {
 	}
 	let mut phase = Phase::Player;
 
+	let mut turn_counter = 0;
 	let mut crystal_amount = 20;
 
 	let mut current_animation: Option<Animation> = None;
@@ -944,6 +945,45 @@ fn main() {
 					DrawSpriteEffects::none(),
 				);
 			}
+
+			Font {
+				size_factor: 3,
+				horizontal_spacing: 2,
+				space_width: 7,
+				foreground: Color::WHITE,
+				background: None,
+				margins: (0, 0).into(),
+			}
+			.draw_text_line(
+				&mut renderer,
+				&format!("turn {turn_counter}"),
+				(0, 60).into(),
+				PinPoint::TOP_LEFT,
+			)
+			.unwrap();
+
+			Font {
+				size_factor: 3,
+				horizontal_spacing: 2,
+				space_width: 7,
+				foreground: Color::WHITE,
+				background: None,
+				margins: (0, 0).into(),
+			}
+			.draw_text_line(
+				&mut renderer,
+				&format!(
+					"{} phase",
+					match phase {
+						Phase::Player => "player",
+						Phase::Enemy => "enemy",
+						Phase::Tower => "tower",
+					}
+				),
+				(0, 90).into(),
+				PinPoint::TOP_LEFT,
+			)
+			.unwrap();
 
 			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
 			let map_left = -(camera_x * 8.0 * 8.0) as i32;
@@ -1232,6 +1272,7 @@ fn main() {
 					}
 					if !found_an_tower_to_make_play {
 						phase = Phase::Player;
+						turn_counter += 1;
 					}
 				}
 			}
