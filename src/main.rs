@@ -624,7 +624,8 @@ fn main() {
 				renderer.resized((*new_size).into());
 				window.request_redraw();
 
-				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
+				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+				{
 					map.generate_chunk_on_the_right();
 				}
 			},
@@ -654,7 +655,7 @@ fn main() {
 				button: MouseButton::Left,
 				..
 			} => {
-				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is no tstable yet you nincompoop
+				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is not stable yet you nincompoop
 				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
 					let tile = map.grid.get(selected_tile_coords.unwrap()).unwrap().clone();
 					let tower_price = 10;
@@ -745,7 +746,8 @@ fn main() {
 					start: std::time::Instant::now(),
 					duration: std::time::Duration::from_secs_f32(0.05),
 				});
-				while map.grid.dims.w * 8 * 8 < (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w {
+				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+				{
 					map.generate_chunk_on_the_right();
 				}
 				end_player_phase_after_animation = true;
@@ -997,6 +999,29 @@ fn main() {
 						}
 					}
 					if !found_an_enemy_to_make_play {
+						// Enemy spawn
+						while map.grid.dims.w * 8 * 8
+							<= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+						{
+							map.generate_chunk_on_the_right();
+						}
+						let spawn_coords: Coords = 'spawn_coords: {
+							let right = (camera_x + 1.0) as i32 + renderer.dims().w / (8 * 8);
+							for y in 0..map.grid.dims.h {
+								if map.grid.get((right, y).into()).unwrap().has_path() {
+									break 'spawn_coords (right, y).into();
+								}
+							}
+							panic!("no path one some column ?");
+						};
+						let spawn_tile = map.grid.get_mut(spawn_coords).unwrap();
+						if spawn_tile.obj.is_none() && rand_range(0.0..1.0) < 0.4 {
+							let hp = if rand_range(0.0..1.0) < 0.3 { 8 } else { 6 };
+							spawn_tile.obj =
+								Some(Obj::EnemyBasic { can_play: false, hp, alive_animation: None });
+						}
+
+						// Get to next phase
 						phase = Phase::Tower;
 						for coords in map.grid.dims.iter() {
 							if let Some(Obj::TowerBasic { ref mut can_play }) =
