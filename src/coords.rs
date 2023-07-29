@@ -1,3 +1,4 @@
+/// Plain old integer coordinates.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Coords {
 	pub x: i32,
@@ -16,38 +17,38 @@ impl std::ops::Mul<i32> for Coords {
 		self
 	}
 }
-impl std::ops::Add<DxDy> for Coords {
+impl std::ops::Add<CoordsDelta> for Coords {
 	type Output = Coords;
-	fn add(mut self, rhs: DxDy) -> Coords {
+	fn add(mut self, rhs: CoordsDelta) -> Coords {
 		self.x += rhs.dx;
 		self.y += rhs.dy;
 		self
 	}
 }
-impl std::ops::AddAssign<DxDy> for Coords {
-	fn add_assign(&mut self, rhs: DxDy) {
+impl std::ops::AddAssign<CoordsDelta> for Coords {
+	fn add_assign(&mut self, rhs: CoordsDelta) {
 		self.x += rhs.dx;
 		self.y += rhs.dy;
 	}
 }
-impl std::ops::Sub<DxDy> for Coords {
+impl std::ops::Sub<CoordsDelta> for Coords {
 	type Output = Coords;
-	fn sub(mut self, rhs: DxDy) -> Coords {
+	fn sub(mut self, rhs: CoordsDelta) -> Coords {
 		self.x -= rhs.dx;
 		self.y -= rhs.dy;
 		self
 	}
 }
-impl std::ops::SubAssign<DxDy> for Coords {
-	fn sub_assign(&mut self, rhs: DxDy) {
+impl std::ops::SubAssign<CoordsDelta> for Coords {
+	fn sub_assign(&mut self, rhs: CoordsDelta) {
 		self.x -= rhs.dx;
 		self.y -= rhs.dy;
 	}
 }
 impl std::ops::Sub<Coords> for Coords {
-	type Output = DxDy;
-	fn sub(self, rhs: Coords) -> DxDy {
-		DxDy { dx: self.x - rhs.x, dy: self.y - rhs.y }
+	type Output = CoordsDelta;
+	fn sub(self, rhs: Coords) -> CoordsDelta {
+		CoordsDelta { dx: self.x - rhs.x, dy: self.y - rhs.y }
 	}
 }
 
@@ -58,85 +59,55 @@ impl Coords {
 	}
 }
 
+/// Represents a difference between two `Coords`s.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct DxDy {
+pub struct CoordsDelta {
 	pub dx: i32,
 	pub dy: i32,
 }
-impl DxDy {
-	pub const UP: DxDy = DxDy { dx: 0, dy: -1 };
-	pub const RIGHT: DxDy = DxDy { dx: 1, dy: 0 };
-	pub const DOWN: DxDy = DxDy { dx: 0, dy: 1 };
-	pub const LEFT: DxDy = DxDy { dx: -1, dy: 0 };
+impl CoordsDelta {
+	pub const UP: Self = CoordsDelta { dx: 0, dy: -1 };
+	pub const RIGHT: Self = CoordsDelta { dx: 1, dy: 0 };
+	pub const DOWN: Self = CoordsDelta { dx: 0, dy: 1 };
+	pub const LEFT: Self = CoordsDelta { dx: -1, dy: 0 };
 
-	pub fn iter_4_directions() -> impl Iterator<Item = DxDy> {
-		[DxDy::UP, DxDy::RIGHT, DxDy::DOWN, DxDy::LEFT].into_iter()
+	pub fn iter_4_directions() -> impl Iterator<Item = CoordsDelta> {
+		[Self::UP, Self::RIGHT, Self::DOWN, Self::LEFT].into_iter()
 	}
 }
-impl From<(i32, i32)> for DxDy {
-	fn from((dx, dy): (i32, i32)) -> DxDy {
-		DxDy { dx, dy }
+impl From<(i32, i32)> for CoordsDelta {
+	fn from((dx, dy): (i32, i32)) -> CoordsDelta {
+		CoordsDelta { dx, dy }
 	}
 }
-impl From<Dimensions> for DxDy {
-	fn from(dims: Dimensions) -> DxDy {
-		DxDy { dx: dims.w, dy: dims.h }
+impl From<Dimensions> for CoordsDelta {
+	fn from(dims: Dimensions) -> CoordsDelta {
+		CoordsDelta { dx: dims.w, dy: dims.h }
 	}
 }
-impl From<Coords> for DxDy {
-	fn from(coords: Coords) -> DxDy {
-		DxDy { dx: coords.x, dy: coords.y }
+impl From<Coords> for CoordsDelta {
+	fn from(coords: Coords) -> CoordsDelta {
+		CoordsDelta { dx: coords.x, dy: coords.y }
 	}
 }
-impl std::ops::Neg for DxDy {
-	type Output = DxDy;
-	fn neg(mut self) -> DxDy {
+impl std::ops::Neg for CoordsDelta {
+	type Output = CoordsDelta;
+	fn neg(mut self) -> CoordsDelta {
 		self.dx *= -1;
 		self.dy *= -1;
 		self
 	}
 }
-impl std::ops::Mul<i32> for DxDy {
-	type Output = DxDy;
-	fn mul(mut self, rhs: i32) -> DxDy {
+impl std::ops::Mul<i32> for CoordsDelta {
+	type Output = CoordsDelta;
+	fn mul(mut self, rhs: i32) -> CoordsDelta {
 		self.dx *= rhs;
 		self.dy *= rhs;
 		self
 	}
 }
 
-#[derive(Clone, Copy)]
-pub struct CoordsF {
-	pub x: f32,
-	pub y: f32,
-}
-impl From<(f32, f32)> for CoordsF {
-	fn from((x, y): (f32, f32)) -> CoordsF {
-		CoordsF { x, y }
-	}
-}
-impl std::ops::Add for CoordsF {
-	type Output = CoordsF;
-	fn add(mut self, rhs: CoordsF) -> CoordsF {
-		self.x += rhs.x;
-		self.y += rhs.y;
-		self
-	}
-}
-impl std::ops::Mul<f32> for CoordsF {
-	type Output = CoordsF;
-	fn mul(mut self, rhs: f32) -> CoordsF {
-		self.x *= rhs;
-		self.y *= rhs;
-		self
-	}
-}
-impl CoordsF {
-	pub fn _as_dxdy(self) -> DxDy {
-		DxDy { dx: self.x.round() as i32, dy: self.y.round() as i32 }
-	}
-}
-
+/// Represents the (integer) size of a rectangular area (but not its position).
 #[derive(Clone, Copy)]
 pub struct Dimensions {
 	pub w: i32,
@@ -181,17 +152,17 @@ impl std::ops::Mul<i32> for Dimensions {
 		self
 	}
 }
-impl std::ops::Add<DxDy> for Dimensions {
+impl std::ops::Add<CoordsDelta> for Dimensions {
 	type Output = Dimensions;
-	fn add(mut self, rhs: DxDy) -> Dimensions {
+	fn add(mut self, rhs: CoordsDelta) -> Dimensions {
 		self.w += rhs.dx;
 		self.h += rhs.dy;
 		self
 	}
 }
-impl std::ops::Sub<DxDy> for Dimensions {
+impl std::ops::Sub<CoordsDelta> for Dimensions {
 	type Output = Dimensions;
-	fn sub(mut self, rhs: DxDy) -> Dimensions {
+	fn sub(mut self, rhs: CoordsDelta) -> Dimensions {
 		self.w -= rhs.dx;
 		self.h -= rhs.dy;
 		self
@@ -272,7 +243,7 @@ impl Rect {
 
 	pub fn _add_margin(self, margin: i32) -> Rect {
 		Rect {
-			top_left: self.top_left - DxDy::from((margin, margin)),
+			top_left: self.top_left - CoordsDelta::from((margin, margin)),
 			dims: self.dims + (margin * 2, margin * 2).into(),
 		}
 	}
@@ -319,7 +290,7 @@ impl<T: Clone> Grid<T> {
 				if coords.x < self.dims.w {
 					self.get(coords).unwrap().clone()
 				} else {
-					rhs.get(coords - DxDy::from((self.dims.w, 0)))
+					rhs.get(coords - CoordsDelta::from((self.dims.w, 0)))
 						.unwrap()
 						.clone()
 				}

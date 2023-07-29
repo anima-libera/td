@@ -80,8 +80,8 @@ use crate::rodio_wrapper::*;
 
 #[derive(Clone)]
 struct Path {
-	forward: DxDy,
-	backward: DxDy,
+	forward: CoordsDelta,
+	backward: CoordsDelta,
 }
 
 #[derive(Clone)]
@@ -110,16 +110,45 @@ impl Ground {
 	}
 }
 
+use std::time::{Duration, Instant};
+
+/// A period over which something happens can be represented with this.
+/// It also makes easier to know at which point of the progression we currently are.
+///
+/// For example, an animation can contain a `TimeProgression` that allows to set its duration
+/// and to know at every frame at which point we are in the progression of the animation.
 #[derive(Clone)]
-struct AliveAnimation {
-	start: std::time::Instant,
-	duration: std::time::Duration,
+struct TimeProgression {
+	start: Instant,
+	duration: Duration,
 }
 
+impl TimeProgression {
+	fn new(duration: Duration) -> TimeProgression {
+		TimeProgression { start: Instant::now(), duration }
+	}
+
+	/// Returns 0.0 if the represented period is just starting, 1.0 if it is just ending,
+	/// and some ratio representing the progression when it is between its start and end.
+	fn progress(&self) -> f32 {
+		Instant::now().duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32()
+	}
+
+	fn is_done(&self) -> bool {
+		1.0 <= self.progress()
+	}
+}
+
+/// Squishes a little to appear more alive than rocks.
+#[derive(Clone)]
+struct AliveAnimation {
+	tp: TimeProgression,
+}
+
+/// Appear a certain color for a short time, for example flashing red when hit.
 #[derive(Clone)]
 struct ColoredAnimation {
-	start: std::time::Instant,
-	duration: std::time::Duration,
+	tp: TimeProgression,
 	color: Color,
 }
 
@@ -195,7 +224,12 @@ impl Map {
 				// By flipping them around various axes we can draw all the cases.
 				let sprite_straight = (4, 0);
 				let sprite_turn = (5, 0);
-				fn is_turn(forward: DxDy, backward: DxDy, a: DxDy, b: DxDy) -> bool {
+				fn is_turn(
+					forward: CoordsDelta,
+					backward: CoordsDelta,
+					a: CoordsDelta,
+					b: CoordsDelta,
+				) -> bool {
 					(forward == a && backward == b) || (backward == a && forward == b)
 				}
 				let (sprite_coords, flip_horizontally, flip_vertically, flip_diagonally_id) =
@@ -203,13 +237,13 @@ impl Map {
 						(sprite_straight, false, false, false) // Horizontal
 					} else if forward.dx == 0 && backward.dx == 0 {
 						(sprite_straight, false, false, true) // Vertical
-					} else if is_turn(forward, backward, DxDy::UP, DxDy::LEFT) {
+					} else if is_turn(forward, backward, CoordsDelta::UP, CoordsDelta::LEFT) {
 						(sprite_turn, false, false, false)
-					} else if is_turn(forward, backward, DxDy::DOWN, DxDy::LEFT) {
+					} else if is_turn(forward, backward, CoordsDelta::DOWN, CoordsDelta::LEFT) {
 						(sprite_turn, false, true, false)
-					} else if is_turn(forward, backward, DxDy::UP, DxDy::RIGHT) {
+					} else if is_turn(forward, backward, CoordsDelta::UP, CoordsDelta::RIGHT) {
 						(sprite_turn, true, false, false)
-					} else if is_turn(forward, backward, DxDy::DOWN, DxDy::RIGHT) {
+					} else if is_turn(forward, backward, CoordsDelta::DOWN, CoordsDelta::RIGHT) {
 						(sprite_turn, true, true, false)
 					} else {
 						panic!(
@@ -236,21 +270,22 @@ impl Map {
 				// This is done to give a sense of depth (the water level is thus
 				// percieved as a bit below ground level).
 				let there_is_water_on_the_top =
-					if let Some(tile_on_the_top) = self.grid.get(coords + DxDy::from((0, -1))) {
+					if let Some(tile_on_the_top) = self.grid.get(coords + CoordsDelta::from((0, -1))) {
 						tile_on_the_top.has_water()
 					} else {
 						false
 					};
-				let there_is_nothing_on_the_top = self.grid.get(coords + DxDy::from((0, -1))).is_none();
+				let there_is_nothing_on_the_top =
+					self.grid.get(coords + CoordsDelta::from((0, -1))).is_none();
 				let there_is_ground_on_the_top_left_corner = if let Some(tile_on_the_top_left_corner) =
-					self.grid.get(coords + DxDy::from((-1, -1)))
+					self.grid.get(coords + CoordsDelta::from((-1, -1)))
 				{
 					!tile_on_the_top_left_corner.has_water()
 				} else {
 					false
 				};
 				let there_is_water_on_the_left =
-					if let Some(tile_on_the_left) = self.grid.get(coords + DxDy::from((-1, 0))) {
+					if let Some(tile_on_the_left) = self.grid.get(coords + CoordsDelta::from((-1, 0))) {
 						tile_on_the_left.has_water()
 					} else {
 						true
@@ -280,14 +315,13 @@ impl Map {
 		}
 	}
 
-	fn damage_obj_at(&mut self, coords: Coords, damages: i32) {
+	fn inflict_damage_to_obj_at(&mut self, coords: Coords, damages: i32) {
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
 			Some(Obj::EnemyBasic { ref mut hp, ref mut colored_animation, .. }) => {
 				*hp -= damages;
 				*colored_animation = Some(ColoredAnimation {
-					start: std::time::Instant::now(),
-					duration: std::time::Duration::from_secs_f32(0.075),
+					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
 					color: Color::rgb_u8(255, 0, 0),
 				});
 				*hp <= 0
@@ -344,10 +378,11 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			let unsquished_dst = dst;
 			if let Some(anim) = alive_animation {
-				let progress = std::time::Instant::now()
-					.duration_since(anim.start)
-					.as_secs_f32() / anim.duration.as_secs_f32();
-				if progress < 1.0 {
+				// The "alive" animation is meant to make the enemies look more alive than rocks.
+				// When the animation triggers, the sprite of the enemy is supposed to squish a little
+				// before coming back to its normal dimensions.
+				if !anim.tp.is_done() {
+					// At the point when the sprite is the most squished, it is `dst_squish`.
 					let squish_x = 0.8;
 					let squish_y = 1.2;
 					let mut dst_squish = dst;
@@ -355,20 +390,20 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 					dst_squish.dims.w -= (dst.dims.w as f32 * (1.0 - squish_x)) as i32;
 					dst_squish.top_left.y += (dst.dims.h as f32 * (1.0 - squish_y)) as i32;
 					dst_squish.dims.h -= (dst.dims.h as f32 * (1.0 - squish_y)) as i32;
-					//renderer.draw_rect_edge(dst_squish, Color::rgb_u8(255, 0, 0));
-					//renderer.draw_rect_edge(dst, Color::rgb_u8(0, 255, 0));
+					// The animation happens in two times: normal -> squished -> normal.
+					let progress = anim.tp.progress();
 					if progress < 0.5 {
+						// Normal -> squihed.
 						dst = linear_interpolation_rect(progress * 2.0, dst, dst_squish);
 					} else {
+						// Squished -> normal.
 						dst = linear_interpolation_rect(progress * 2.0 - 1.0, dst_squish, dst);
 					}
 				}
 			}
 			let color = if let Some(anim) = colored_animation {
-				let progress = std::time::Instant::now()
-					.duration_since(anim.start)
-					.as_secs_f32() / anim.duration.as_secs_f32();
-				if progress < 1.0 {
+				// Handle the case when the enemy sprite is flashing in some color.
+				if !anim.tp.is_done() {
 					Some(anim.color)
 				} else {
 					None
@@ -379,6 +414,11 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			let mut effects = DrawSpriteEffects::none();
 			effects.paint = color;
 			renderer.draw_sprite(dst, sprite, effects);
+			// Now we render the hp counter of the enemy above it (centered),
+			// and we make it go up with the squishing during "alive" animations (because its cute!).
+			let mut top_center = unsquished_dst.top_left;
+			top_center.x += unsquished_dst.dims.w / 2;
+			top_center.y += unsquished_dst.dims.h / 10 + (unsquished_dst.dims.h - dst.dims.h);
 			Font {
 				size_factor: 3,
 				horizontal_spacing: 2,
@@ -387,12 +427,12 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 				background: Some(Color::BLACK),
 				margins: (3, 3).into(),
 			}
-			.draw_text_line(renderer, &format!("{hp}"), unsquished_dst.top_left)
+			.draw_text_line(renderer, &format!("{hp}"), top_center, PinPoint::TOP_CENTER)
 			.unwrap();
 		},
 		Obj::TowerBasic { .. } => {
 			let sprite = Rect::tile((8, 4).into(), 16);
-			dst.top_left.y -= dst.dims.h * 3 / 16;
+			dst.top_left.y -= dst.dims.h * 2 / 16;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
 	}
@@ -438,16 +478,18 @@ impl Chunk {
 					break;
 				}
 
-				let dxdy = DxDy::iter_4_directions().nth(rand_range(0..4)).unwrap();
+				let direction = CoordsDelta::iter_4_directions()
+					.nth(rand_range(0..4))
+					.unwrap();
 				if grid
-					.get(cur_head + dxdy)
+					.get(cur_head + direction)
 					.is_some_and(|tile| !tile.has_path())
 				{
 					let backward = prev_head - cur_head;
-					let forward = dxdy;
+					let forward = direction;
 					grid.get_mut(cur_head).unwrap().ground = Ground::Path(Path { forward, backward });
 					prev_head = cur_head;
-					cur_head += dxdy;
+					cur_head += direction;
 				} else {
 					continue 'try_new_path;
 				}
@@ -464,7 +506,9 @@ impl Chunk {
 					break;
 				}
 				tile.ground = Ground::Water;
-				let dxdy = DxDy::iter_4_directions().nth(rand_range(0..4)).unwrap();
+				let dxdy = CoordsDelta::iter_4_directions()
+					.nth(rand_range(0..4))
+					.unwrap();
 				if grid.get(coords + dxdy).is_some_and(|tile| !tile.has_path()) {
 					coords += dxdy;
 				}
@@ -544,8 +588,7 @@ enum Action {
 
 struct Animation {
 	action: Action,
-	start: std::time::Instant,
-	duration: std::time::Duration,
+	tp: TimeProgression,
 }
 
 /// When `progress` is 0.0 it returns `value_start`, 1.0 returns `value_end`
@@ -698,8 +741,7 @@ fn main() {
 								obj: Obj::TowerBasic { can_play: false },
 								to: selected_tile_coords.unwrap(),
 							},
-							start: std::time::Instant::now(),
-							duration: std::time::Duration::from_secs_f32(0.05),
+							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 						});
 						crystal_amount -= tower_price;
 						end_player_phase_after_animation = true;
@@ -716,8 +758,7 @@ fn main() {
 									.unwrap(),
 								from: selected_tile_coords.unwrap(),
 							},
-							start: std::time::Instant::now(),
-							duration: std::time::Duration::from_secs_f32(0.05),
+							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 						});
 						crystal_amount += 30;
 						end_player_phase_after_animation = true;
@@ -754,8 +795,7 @@ fn main() {
 									from: coords,
 									to: dst_coords,
 								},
-								start: std::time::Instant::now(),
-								duration: std::time::Duration::from_secs_f32(0.05),
+								tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 							});
 							end_player_phase_after_animation = true;
 							break;
@@ -775,8 +815,7 @@ fn main() {
 			} if current_animation.is_none() && phase == Phase::Player => {
 				current_animation = Some(Animation {
 					action: Action::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
-					start: std::time::Instant::now(),
-					duration: std::time::Duration::from_secs_f32(0.05),
+					tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 				});
 				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
 				{
@@ -800,9 +839,7 @@ fn main() {
 					&mut map.grid.get_mut(coords).unwrap().obj
 				{
 					if let Some(anim) = alive_animation {
-						let progress = std::time::Instant::now()
-							.duration_since(anim.start)
-							.as_secs_f32() / anim.duration.as_secs_f32();
+						let progress = anim.tp.progress();
 						if progress > 10.0 {
 							// We wait until way too long after the end of the animation to remove it
 							// so that there is a kind of cooldown for the animation per enemy.
@@ -810,8 +847,7 @@ fn main() {
 						}
 					} else if rand_range(0.0..0.1) < 0.001 {
 						*alive_animation = Some(AliveAnimation {
-							start: std::time::Instant::now(),
-							duration: std::time::Duration::from_secs_f32(0.3),
+							tp: TimeProgression::new(Duration::from_secs_f32(0.3)),
 						});
 					}
 				}
@@ -820,14 +856,19 @@ fn main() {
 			renderer.clear();
 
 			Font {
-				size_factor: 3,
+				size_factor: 2,
 				horizontal_spacing: 2,
 				space_width: 7,
 				foreground: Color::WHITE,
 				background: Some(Color::BLACK),
 				margins: (3, 3).into(),
 			}
-			.draw_text_line(&mut renderer, &format!("fps: {fps}"), (0, 0).into())
+			.draw_text_line(
+				&mut renderer,
+				&format!("fps: {fps}"),
+				(0, 0).into(),
+				PinPoint::TOP_LEFT,
+			)
 			.unwrap();
 
 			{
@@ -839,7 +880,12 @@ fn main() {
 					background: None,
 					margins: (0, 0).into(),
 				}
-				.draw_text_line(&mut renderer, &format!("{crystal_amount}"), (0, 30).into())
+				.draw_text_line(
+					&mut renderer,
+					&format!("{crystal_amount}"),
+					(0, 30).into(),
+					PinPoint::TOP_LEFT,
+				)
 				.unwrap();
 				let crystal_symbol_dst = Rect::xywh(
 					text_rect.right_excluded() + 5,
@@ -903,10 +949,7 @@ fn main() {
 			}
 
 			if let Some(anim) = &current_animation {
-				let progress = std::time::Instant::now()
-					.duration_since(anim.start)
-					.as_secs_f32() / anim.duration.as_secs_f32();
-				if progress > 1.0 {
+				if anim.tp.is_done() {
 					// The current animation is finished.
 					match current_animation.take().unwrap().action {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
@@ -914,7 +957,7 @@ fn main() {
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::Disappear { .. } => {},
 						Action::Shoot { to, .. } => {
-							map.damage_obj_at(to, 1);
+							map.inflict_damage_to_obj_at(to, 1);
 							audio_player.play_sound_effect(SoundEffect::Hit);
 						},
 					}
@@ -930,6 +973,7 @@ fn main() {
 						}
 					}
 				} else {
+					let progress = anim.tp.progress();
 					match &anim.action {
 						Action::Move { obj, from, to } => {
 							let interp_x = {
@@ -1023,8 +1067,7 @@ fn main() {
 									from: coords,
 									to: dst_coords,
 								},
-								start: std::time::Instant::now(),
-								duration: std::time::Duration::from_secs_f32(0.05),
+								tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 							});
 							found_an_enemy_to_make_play = true;
 							break;
@@ -1075,7 +1118,7 @@ fn main() {
 							*can_play = false;
 
 							// Try to shoot an enemy
-							'try_to_shoot: for direction in DxDy::iter_4_directions() {
+							'try_to_shoot: for direction in CoordsDelta::iter_4_directions() {
 								let mut view_coords = coords + direction;
 								loop {
 									if !map.grid.dims.contains(view_coords) {
@@ -1087,10 +1130,9 @@ fn main() {
 											let dist = coords.dist(view_coords);
 											current_animation = Some(Animation {
 												action: Action::Shoot { from: coords, to: view_coords },
-												start: std::time::Instant::now(),
-												duration: std::time::Duration::from_secs_f32(
+												tp: TimeProgression::new(Duration::from_secs_f32(
 													0.05 * dist as f32,
-												),
+												)),
 											});
 											audio_player.play_sound_effect(SoundEffect::Pew);
 											break 'try_to_shoot;

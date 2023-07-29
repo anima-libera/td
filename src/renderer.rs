@@ -68,6 +68,46 @@ pub struct Font {
 	pub margins: Dimensions,
 }
 
+/// Assume you want to draw something on a point of the canvas.
+/// But wait, the point you give to the function that does the drawing, is it supposed to
+/// be where the top left of the thing being rendered sould end up?
+/// It might be what you want, but maybe you find it easier in some cases to give the point
+/// on which the center of the thing should end up, or its bottom right corner, or the middle
+/// of its right side, etc.
+/// Well, this is exactly what a `PinPoint` allows to represent!
+/// If you pass `PinPoint::CENTER_LEFT` along a destination point to the hypothetical function
+/// that does the rendering, then the center left point of the thing being rendered will end up
+/// on the destination point you gave.
+#[derive(Clone, Copy)]
+pub struct PinPoint {
+	x: f32,
+	y: f32,
+}
+#[allow(dead_code)] // I don't want to comment out exactly the ones that happen to not be used!
+impl PinPoint {
+	pub const TOP_LEFT: Self = PinPoint { x: 0.0, y: 0.0 };
+	pub const TOP_CENTER: Self = PinPoint { x: 0.5, y: 0.0 };
+	pub const TOP_RIGHT: Self = PinPoint { x: 1.0, y: 0.0 };
+	pub const CENTER_LEFT: Self = PinPoint { x: 0.0, y: 0.5 };
+	pub const CENTER_CENTER: Self = PinPoint { x: 0.5, y: 0.5 };
+	pub const CENTER_RIGHT: Self = PinPoint { x: 1.0, y: 0.5 };
+	pub const BOTTOM_LEFT: Self = PinPoint { x: 0.0, y: 1.0 };
+	pub const BOTTOM_CENTER: Self = PinPoint { x: 0.5, y: 1.0 };
+	pub const BOTTOM_RIGHT: Self = PinPoint { x: 1.0, y: 1.0 };
+}
+impl PinPoint {
+	/// When drawing something of the given dimensions to the given destination point
+	/// that should be interpreted thanks to the given pin point, then the coords of where
+	/// the top left corner of the thing being drawn end up is what this returns.
+	fn actual_top_left_coords(self, dst: Coords, dims: Dimensions) -> Coords {
+		(
+			dst.x - (dims.w as f32 * self.x) as i32,
+			dst.y - (dims.h as f32 * self.y) as i32,
+		)
+			.into()
+	}
+}
+
 #[derive(Debug)]
 pub enum CharError {
 	Unsupported(char),
@@ -108,15 +148,20 @@ impl Font {
 		Ok(width)
 	}
 
+	/// Draws some text at the given destination.
+	/// The part of the text ends up exactly on the destination is specified via
+	/// the `PinPoint` (see its documentation for an explanation).
 	pub fn draw_text_line(
 		&self,
 		renderer: &mut Renderer,
 		text: &str,
-		top_left: Coords,
+		dst: Coords,
+		pp: PinPoint,
 	) -> Result<Rect, CharError> {
 		let width = self.text_line_width(text)? + self.margins.w * 2;
 		let height = 5 * self.size_factor + self.margins.h * 2;
-		let dims = (width, height).into();
+		let dims: Dimensions = (width, height).into();
+		let top_left = pp.actual_top_left_coords(dst, dims);
 		let rect = Rect { top_left, dims };
 		if let Some(background) = self.background {
 			renderer.draw_rect(rect, background);
