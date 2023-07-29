@@ -106,6 +106,14 @@ impl std::ops::Mul<i32> for CoordsDelta {
 		self
 	}
 }
+impl std::ops::Div<i32> for CoordsDelta {
+	type Output = CoordsDelta;
+	fn div(mut self, rhs: i32) -> CoordsDelta {
+		self.dx /= rhs;
+		self.dy /= rhs;
+		self
+	}
+}
 
 /// Represents the (integer) size of a rectangular area (but not its position).
 #[derive(Clone, Copy)]

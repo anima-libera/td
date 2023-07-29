@@ -82,6 +82,7 @@ use crate::rodio_wrapper::*;
 struct Path {
 	forward: CoordsDelta,
 	backward: CoordsDelta,
+	distance: i32,
 }
 
 #[derive(Clone)]
@@ -206,8 +207,6 @@ impl Tile {
 
 struct Map {
 	grid: Grid<Tile>,
-	/// The y coordinate of the path on the right of the generated area.
-	right_path_y: i32,
 }
 
 impl Map {
@@ -219,7 +218,7 @@ impl Map {
 				let sprite = Rect::tile((visual_variant as i32, 0).into(), 16);
 				renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 			},
-			Ground::Path(Path { forward, backward }) => {
+			Ground::Path(Path { forward, backward, .. }) => {
 				// For now we just have a sprite of a streight path and of a L-turn.
 				// By flipping them around various axes we can draw all the cases.
 				let sprite_straight = (4, 0);
@@ -333,12 +332,24 @@ impl Map {
 		}
 	}
 
+	fn rightmost_path_y_and_dist(&self) -> Option<(i32, i32)> {
+		if self.grid.dims.w == 0 {
+			return None;
+		}
+		for y in 0..self.grid.dims.h {
+			let coords: Coords = (self.grid.dims.w - 1, y).into();
+			if let Ground::Path(Path { distance, .. }) = self.grid.get(coords).unwrap().ground {
+				return Some((y, distance));
+			}
+		}
+		panic!("could not find a path on the rightmost column");
+	}
+
 	fn generate_chunk_on_the_right(&mut self) {
-		let chunk = Chunk::generate(self.right_path_y);
+		let chunk = Chunk::generate(self.rightmost_path_y_and_dist());
 		let grid = std::mem::replace(&mut self.grid, Grid::of_size_zero());
 		let grid = grid.add_to_right(chunk.grid);
 		self.grid = grid;
-		self.right_path_y = chunk.right_path_y;
 	}
 }
 
@@ -447,13 +458,11 @@ fn draw_shot(renderer: &mut Renderer, dst: Rect) {
 struct Chunk {
 	/// A 10x10 grid.
 	grid: Grid<Tile>,
-	/// The y coordinate of the path on the right of the chunk.
-	right_path_y: i32,
 }
 
 impl Chunk {
-	fn generate(path_y: i32) -> Chunk {
-		let (mut grid, right_path_y) = 'try_new_path: loop {
+	fn generate(last_path_y_and_dist: Option<(i32, i32)>) -> Chunk {
+		let mut grid = 'try_new_path: loop {
 			// Initialize with only grass.
 			let mut grid = Grid::new((10, 10).into(), |_coords: Coords| Tile {
 				ground: Ground::Grass {
@@ -468,13 +477,16 @@ impl Chunk {
 
 			// We generate the path by moving `cur_head` around randomly and drawing the path.
 			// If it doesn't work then we just try again until it works >w<.
+			let (path_y, mut path_dist) = last_path_y_and_dist
+				.map(|(y, d)| (y, d + 1))
+				.unwrap_or_else(|| (rand_range(0..grid.dims.h), 0));
 			let mut prev_head: Coords = (-1, path_y).into();
 			let mut cur_head: Coords = (0, path_y).into();
 			loop {
 				if cur_head.x == grid.dims.w - 1 {
 					let backward = prev_head - cur_head;
 					grid.get_mut(cur_head).unwrap().ground =
-						Ground::Path(Path { forward: (1, 0).into(), backward });
+						Ground::Path(Path { forward: (1, 0).into(), backward, distance: path_dist });
 					break;
 				}
 
@@ -487,14 +499,16 @@ impl Chunk {
 				{
 					let backward = prev_head - cur_head;
 					let forward = direction;
-					grid.get_mut(cur_head).unwrap().ground = Ground::Path(Path { forward, backward });
+					grid.get_mut(cur_head).unwrap().ground =
+						Ground::Path(Path { forward, backward, distance: path_dist });
+					path_dist += 1;
 					prev_head = cur_head;
 					cur_head += direction;
 				} else {
 					continue 'try_new_path;
 				}
 			}
-			break (grid, cur_head.y);
+			break grid;
 		};
 
 		// Generate some water.
@@ -574,7 +588,7 @@ impl Chunk {
 			}
 		}
 
-		Chunk { grid, right_path_y }
+		Chunk { grid }
 	}
 }
 
@@ -640,8 +654,7 @@ fn main() {
 
 	let audio_player = AudioPlayer::new();
 
-	let left_path_y = rand_range(1..9);
-	let mut map = Map { grid: Grid::of_size_zero(), right_path_y: left_path_y };
+	let mut map = Map { grid: Grid::of_size_zero() };
 
 	while map.grid.dims.w * 8 * 8 < renderer.dims().w {
 		map.generate_chunk_on_the_right();
@@ -656,7 +669,12 @@ fn main() {
 		}
 	}
 
-	map.grid.get_mut((0, left_path_y).into()).unwrap().obj = Some(Obj::Caravan);
+	for y in 0..map.grid.dims.h {
+		let coords = (0, y).into();
+		if let Ground::Path(Path { distance: 0, .. }) = map.grid.get(coords).unwrap().ground {
+			map.grid.get_mut(coords).unwrap().obj = Some(Obj::Caravan);
+		}
+	}
 
 	#[derive(PartialEq, Eq)]
 	enum Phase {
@@ -677,6 +695,8 @@ fn main() {
 	let mut cursor_position = Coords::from((0, 0));
 	let mut hovered_tile_coords: Option<Coords> = None;
 	let mut selected_tile_coords: Option<Coords> = None;
+
+	let mut display_path_dist = false;
 
 	let mut last_time = std::time::Instant::now();
 
@@ -835,6 +855,18 @@ fn main() {
 				..
 			} if current_animation.is_none() && phase == Phase::Player => {
 				end_player_phase_right_now = true;
+			},
+
+			WindowEvent::KeyboardInput {
+				input:
+					KeyboardInput {
+						state,
+						virtual_keycode: Some(VirtualKeyCode::RShift | VirtualKeyCode::LShift),
+						..
+					},
+				..
+			} => {
+				display_path_dist = *state == ElementState::Pressed;
 			},
 
 			_ => {},
@@ -1176,6 +1208,43 @@ fn main() {
 					if !found_an_tower_to_make_play {
 						phase = Phase::Player;
 					}
+				}
+			}
+
+			if display_path_dist {
+				for coords in map.grid.dims.iter() {
+					let dst = Rect::xywh(
+						map_left + 8 * 8 * coords.x,
+						map_top + 8 * 8 * coords.y,
+						8 * 8,
+						8 * 8,
+					);
+					if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+						continue;
+					}
+					let distance = if let Ground::Path(Path { distance, .. }) =
+						map.grid.get(coords).unwrap().ground
+					{
+						distance
+					} else {
+						continue;
+					};
+					let center = dst.top_left + CoordsDelta::from(dst.dims) / 2;
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(80, 255, 255),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						&mut renderer,
+						&format!("{distance}"),
+						center,
+						PinPoint::CENTER_CENTER,
+					)
+					.unwrap();
 				}
 			}
 
