@@ -117,6 +117,13 @@ struct AliveAnimation {
 }
 
 #[derive(Clone)]
+struct ColoredAnimation {
+	start: std::time::Instant,
+	duration: std::time::Duration,
+	color: Color,
+}
+
+#[derive(Clone)]
 enum Obj {
 	Caravan,
 	Tree,
@@ -128,6 +135,7 @@ enum Obj {
 		can_play: bool,
 		hp: i32,
 		alive_animation: Option<AliveAnimation>,
+		colored_animation: Option<ColoredAnimation>,
 	},
 	TowerBasic {
 		can_play: bool,
@@ -275,8 +283,13 @@ impl Map {
 	fn damage_obj_at(&mut self, coords: Coords, damages: i32) {
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
-			Some(Obj::EnemyBasic { ref mut hp, .. }) => {
+			Some(Obj::EnemyBasic { ref mut hp, ref mut colored_animation, .. }) => {
 				*hp -= damages;
+				*colored_animation = Some(ColoredAnimation {
+					start: std::time::Instant::now(),
+					duration: std::time::Duration::from_secs_f32(0.075),
+					color: Color::rgb_u8(255, 0, 0),
+				});
 				*hp <= 0
 			},
 			Some(_) => false,
@@ -326,7 +339,7 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			dst.top_left.y -= 8 * 8 / 8;
 			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
 		},
-		Obj::EnemyBasic { hp, alive_animation, .. } => {
+		Obj::EnemyBasic { hp, alive_animation, colored_animation, .. } => {
 			let sprite = Rect::tile((4, 8).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			let unsquished_dst = dst;
@@ -351,12 +364,26 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 					}
 				}
 			}
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			let color = if let Some(anim) = colored_animation {
+				let progress = std::time::Instant::now()
+					.duration_since(anim.start)
+					.as_secs_f32() / anim.duration.as_secs_f32();
+				if progress < 1.0 {
+					Some(anim.color)
+				} else {
+					None
+				}
+			} else {
+				None
+			};
+			let mut effects = DrawSpriteEffects::none();
+			effects.paint = color;
+			renderer.draw_sprite(dst, sprite, effects);
 			Font {
 				size_factor: 3,
 				horizontal_spacing: 2,
 				space_width: 7,
-				foreground: Color::WHITE,
+				foreground: color.unwrap_or(Color::WHITE),
 				background: Some(Color::BLACK),
 				margins: (3, 3).into(),
 			}
@@ -493,7 +520,12 @@ impl Chunk {
 			if tile.has_path() {
 				let enemy_probability = 0.1;
 				if rand_range(0.0..1.0) < enemy_probability {
-					tile.obj = Some(Obj::EnemyBasic { can_play: false, hp: 6, alive_animation: None });
+					tile.obj = Some(Obj::EnemyBasic {
+						can_play: false,
+						hp: 6,
+						alive_animation: None,
+						colored_animation: None,
+					});
 				}
 			}
 		}
@@ -1017,8 +1049,12 @@ fn main() {
 						let spawn_tile = map.grid.get_mut(spawn_coords).unwrap();
 						if spawn_tile.obj.is_none() && rand_range(0.0..1.0) < 0.4 {
 							let hp = if rand_range(0.0..1.0) < 0.3 { 8 } else { 6 };
-							spawn_tile.obj =
-								Some(Obj::EnemyBasic { can_play: false, hp, alive_animation: None });
+							spawn_tile.obj = Some(Obj::EnemyBasic {
+								can_play: false,
+								hp,
+								alive_animation: None,
+								colored_animation: None,
+							});
 						}
 
 						// Get to next phase
