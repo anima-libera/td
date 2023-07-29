@@ -668,8 +668,9 @@ fn main() {
 
 	let mut crystal_amount = 20;
 
-	let mut end_player_phase_after_animation = false;
 	let mut current_animation: Option<Animation> = None;
+	let mut end_player_phase_after_animation = false;
+	let mut end_player_phase_right_now = false;
 
 	let mut camera_x = 0.0;
 
@@ -824,6 +825,18 @@ fn main() {
 				end_player_phase_after_animation = true;
 			},
 
+			WindowEvent::KeyboardInput {
+				input:
+					KeyboardInput {
+						state: ElementState::Pressed,
+						virtual_keycode: Some(VirtualKeyCode::S),
+						..
+					},
+				..
+			} if current_animation.is_none() && phase == Phase::Player => {
+				end_player_phase_right_now = true;
+			},
+
 			_ => {},
 		},
 
@@ -963,6 +976,7 @@ fn main() {
 					}
 					if end_player_phase_after_animation {
 						end_player_phase_after_animation = false;
+						end_player_phase_right_now = false;
 						phase = Phase::Enemy;
 						for coords in map.grid.dims.iter() {
 							if let Some(Obj::EnemyBasic { ref mut can_play, .. }) =
@@ -1044,6 +1058,17 @@ fn main() {
 							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
 							draw_shot(&mut renderer, dst);
 						},
+					}
+				}
+			} else if end_player_phase_right_now {
+				end_player_phase_after_animation = false;
+				end_player_phase_right_now = false;
+				phase = Phase::Enemy;
+				for coords in map.grid.dims.iter() {
+					if let Some(Obj::EnemyBasic { ref mut can_play, .. }) =
+						map.grid.get_mut(coords).unwrap().obj
+					{
+						*can_play = true;
 					}
 				}
 			} else {
