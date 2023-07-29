@@ -1106,8 +1106,27 @@ fn main() {
 			} else {
 				// There might be something to do now.
 				if phase == Phase::Enemy {
-					let mut found_an_enemy_to_make_play = false;
+					// The enemies shall play now.
+					// We make the enemies closer to the caravan play first so that they don't
+					// bump into each other too much.
+					// Closer to the caravan here means on a path tile with the smallest distance.
+					// First we find the coords of the closest enemy (if any).
+					let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
 					for coords in map.grid.dims.iter() {
+						let tile = map.grid.get(coords).unwrap();
+						if let Some(Obj::EnemyBasic { can_play: true, .. }) = tile.obj {
+							if let Some(Path { distance, .. }) = tile.path() {
+								if min_path_dist_and_coords.is_none()
+									|| min_path_dist_and_coords
+										.is_some_and(|(dist_min, _)| *distance < dist_min)
+								{
+									min_path_dist_and_coords = Some((*distance, coords));
+								}
+							}
+						}
+					}
+					if let Some((_, coords)) = min_path_dist_and_coords {
+						// Found the closest enemy that hasn't played yet. This enemy plays now.
 						let tile = map.grid.get_mut(coords).unwrap();
 						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true, .. }) = tile.obj
 						{
@@ -1118,19 +1137,25 @@ fn main() {
 								panic!("enemy not on a path")
 							};
 							let dst_coords = coords + backward;
-							current_animation = Some(Animation {
-								action: Action::Move {
-									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
-									from: coords,
-									to: dst_coords,
-								},
-								tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-							});
-							found_an_enemy_to_make_play = true;
-							break;
+							if map
+								.grid
+								.get(dst_coords)
+								.is_some_and(|dst_tile| dst_tile.obj.is_none())
+							{
+								current_animation = Some(Animation {
+									action: Action::Move {
+										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+										from: coords,
+										to: dst_coords,
+									},
+									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+								});
+							}
 						}
-					}
-					if !found_an_enemy_to_make_play {
+					} else {
+						// No enemies left to play.
+						// We finish some enemy buisness and get to next phase.
+
 						// Enemy spawn
 						while map.grid.dims.w * 8 * 8
 							<= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
