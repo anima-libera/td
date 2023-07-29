@@ -113,12 +113,13 @@ impl Font {
 		renderer: &mut Renderer,
 		text: &str,
 		top_left: Coords,
-	) -> Result<(), CharError> {
+	) -> Result<Rect, CharError> {
 		let width = self.text_line_width(text)? + self.margins.w * 2;
 		let height = 5 * self.size_factor + self.margins.h * 2;
 		let dims = (width, height).into();
+		let rect = Rect { top_left, dims };
 		if let Some(background) = self.background {
-			renderer.draw_rect(Rect { top_left, dims }, background);
+			renderer.draw_rect(rect, background);
 		}
 		let mut head = top_left + self.margins.into();
 		let mut last_can_have_spacing = false;
@@ -150,7 +151,7 @@ impl Font {
 			};
 			last_can_have_spacing = current_can_have_spacing;
 		}
-		Ok(())
+		Ok(rect)
 	}
 }
 

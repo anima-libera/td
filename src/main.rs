@@ -506,6 +506,7 @@ enum Action {
 	Move { obj: Obj, from: Coords, to: Coords },
 	CameraMoveX { from: f32, to: f32 },
 	Appear { obj: Obj, to: Coords },
+	Disappear { obj: Obj, from: Coords },
 	Shoot { from: Coords, to: Coords },
 }
 
@@ -560,7 +561,7 @@ fn main() {
 		screen_size.height / 2 - window_outer_size.height / 2,
 	));
 
-	let mut renderer = Renderer::new(&window, Color::rgb_u8(30, 30, 50));
+	let mut renderer = Renderer::new(&window, Color::rgb_u8(80, 80, 200));
 
 	let audio_player = AudioPlayer::new();
 
@@ -589,6 +590,8 @@ fn main() {
 		Tower,
 	}
 	let mut phase = Phase::Player;
+
+	let mut crystal_amount = 20;
 
 	let mut end_player_phase_after_animation = false;
 	let mut current_animation: Option<Animation> = None;
@@ -653,15 +656,39 @@ fn main() {
 			} => {
 				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is no tstable yet you nincompoop
 				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
-					current_animation = Some(Animation {
-						action: Action::Appear {
-							obj: Obj::TowerBasic { can_play: false },
-							to: selected_tile_coords.unwrap(),
-						},
-						start: std::time::Instant::now(),
-						duration: std::time::Duration::from_secs_f32(0.05),
-					});
-					end_player_phase_after_animation = true;
+					let tile = map.grid.get(selected_tile_coords.unwrap()).unwrap().clone();
+					let tower_price = 10;
+					if tile.obj.is_none() && !tile.has_water() && crystal_amount >= tower_price {
+						// Place a tower on empty ground.
+						current_animation = Some(Animation {
+							action: Action::Appear {
+								obj: Obj::TowerBasic { can_play: false },
+								to: selected_tile_coords.unwrap(),
+							},
+							start: std::time::Instant::now(),
+							duration: std::time::Duration::from_secs_f32(0.05),
+						});
+						crystal_amount -= tower_price;
+						end_player_phase_after_animation = true;
+					} else if let Some(Obj::Crystal) = tile.obj {
+						// Mine the crystal.
+						current_animation = Some(Animation {
+							action: Action::Disappear {
+								obj: map
+									.grid
+									.get_mut(selected_tile_coords.unwrap())
+									.unwrap()
+									.obj
+									.take()
+									.unwrap(),
+								from: selected_tile_coords.unwrap(),
+							},
+							start: std::time::Instant::now(),
+							duration: std::time::Duration::from_secs_f32(0.05),
+						});
+						crystal_amount += 30;
+						end_player_phase_after_animation = true;
+					}
 				} else {
 					selected_tile_coords = hovered_tile_coords;
 				}
@@ -769,6 +796,30 @@ fn main() {
 			.draw_text_line(&mut renderer, &format!("fps: {fps}"), (0, 0).into())
 			.unwrap();
 
+			{
+				let text_rect = Font {
+					size_factor: 3,
+					horizontal_spacing: 2,
+					space_width: 7,
+					foreground: Color::WHITE,
+					background: None,
+					margins: (0, 0).into(),
+				}
+				.draw_text_line(&mut renderer, &format!("{crystal_amount}"), (0, 30).into())
+				.unwrap();
+				let crystal_symbol_dst = Rect::xywh(
+					text_rect.right_excluded() + 5,
+					text_rect.top() - 8 * 3 / 2 + text_rect.dims.h / 2,
+					8 * 3,
+					8 * 3,
+				);
+				renderer.draw_sprite(
+					crystal_symbol_dst,
+					Rect::xywh(0, 23, 6, 6),
+					DrawSpriteEffects::none(),
+				);
+			}
+
 			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
 			let map_left = -(camera_x * 8.0 * 8.0) as i32;
 
@@ -827,6 +878,7 @@ fn main() {
 						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
 						Action::CameraMoveX { to, .. } => camera_x = to,
 						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
+						Action::Disappear { .. } => {},
 						Action::Shoot { to, .. } => {
 							map.damage_obj_at(to, 1);
 							audio_player.play_sound_effect(SoundEffect::Hit);
@@ -885,6 +937,19 @@ fn main() {
 							dst.dims.w = ((8 * 8) as f32 * progress) as i32;
 							dst.top_left.y += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
 							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
+							draw_obj(&mut renderer, obj, dst);
+						},
+						Action::Disappear { obj, from } => {
+							let mut dst = Rect::xywh(
+								map_left + 8 * 8 * from.x,
+								map_top + 8 * 8 * from.y,
+								8 * 8,
+								8 * 8,
+							);
+							dst.top_left.x += (((8 * 8) / 2) as f32 * progress) as i32;
+							dst.dims.w = ((8 * 8) as f32 * (1.0 - progress)) as i32;
+							dst.top_left.y += (((8 * 8) / 2) as f32 * progress) as i32;
+							dst.dims.h = ((8 * 8) as f32 * (1.0 - progress)) as i32;
 							draw_obj(&mut renderer, obj, dst);
 						},
 						Action::Shoot { from, to } => {
