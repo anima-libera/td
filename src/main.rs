@@ -753,7 +753,11 @@ fn main() {
 				..
 			} => {
 				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is not stable yet you nincompoop
-				if selected_tile_coords.is_some() && selected_tile_coords == hovered_tile_coords {
+				if selected_tile_coords.is_some()
+					&& selected_tile_coords == hovered_tile_coords
+					&& current_animation.is_none()
+					&& phase == Phase::Player
+				{
 					let tile = map.grid.get(selected_tile_coords.unwrap()).unwrap().clone();
 					let tower_price = 10;
 					if tile.obj.is_none() && !tile.has_water() && crystal_amount >= tower_price {
@@ -767,7 +771,10 @@ fn main() {
 						});
 						crystal_amount -= tower_price;
 						end_player_phase_after_animation = true;
-					} else if let Some(Obj::Crystal) = tile.obj {
+					} else if matches!(tile.obj, Some(Obj::Crystal))
+						&& current_animation.is_none()
+						&& phase == Phase::Player
+					{
 						// Mine the crystal.
 						current_animation = Some(Animation {
 							action: Action::Disappear {
@@ -878,6 +885,8 @@ fn main() {
 			let dt = now.duration_since(last_time);
 			last_time = now;
 			let fps = 1.0 / dt.as_secs_f32();
+
+			//std::thread::sleep(Duration::from_secs_f32(0.003));
 
 			// Enemy alive animations.
 			for coords in map.grid.dims.iter() {
@@ -1233,37 +1242,52 @@ fn main() {
 						}
 					}
 				} else if phase == Phase::Tower {
+					// Towers gonna shoot!
 					let mut found_an_tower_to_make_play = false;
-					for coords in map.grid.dims.iter() {
+					for coords in map.grid.dims.iter_left_to_right() {
 						let tile = map.grid.get_mut(coords).unwrap();
 						if let Some(Obj::TowerBasic { can_play: ref mut can_play @ true }) = tile.obj {
 							*can_play = false;
 
-							// Try to shoot an enemy
-							'try_to_shoot: for direction in CoordsDelta::iter_4_directions() {
+							// Towers will shoot at the enemy that they see that is the closest to
+							// the caravan, it seems like a nice default heuristic.
+							let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
+							for direction in CoordsDelta::iter_4_directions() {
 								let mut view_coords = coords + direction;
 								loop {
-									if !map.grid.dims.contains(view_coords) {
+									let tile = map.grid.get(view_coords);
+									if tile.is_none() {
 										break;
 									}
-									if let Some(obj) = &map.grid.get(view_coords).unwrap().obj {
-										if matches!(obj, Obj::EnemyBasic { .. }) {
-											// Shoot
-											let dist = coords.dist(view_coords);
-											current_animation = Some(Animation {
-												action: Action::Shoot { from: coords, to: view_coords },
-												tp: TimeProgression::new(Duration::from_secs_f32(
-													0.05 * dist as f32,
-												)),
-											});
-											audio_player.play_sound_effect(SoundEffect::Pew);
-											break 'try_to_shoot;
-										} else {
-											break;
+									let tile = tile.unwrap();
+									if tile.has_enemy() {
+										if let Some(Path { distance, .. }) = tile.path() {
+											if min_path_dist_and_coords.is_none()
+												|| min_path_dist_and_coords
+													.is_some_and(|(dist_min, _)| *distance < dist_min)
+											{
+												min_path_dist_and_coords = Some((*distance, view_coords));
+												break;
+											}
 										}
+									}
+									if tile.obj.is_some() {
+										break;
 									}
 									view_coords += direction;
 								}
+							}
+
+							if let Some((_, target_coords)) = min_path_dist_and_coords {
+								// Shoot!
+								let dist_to_target = coords.dist(target_coords);
+								current_animation = Some(Animation {
+									action: Action::Shoot { from: coords, to: target_coords },
+									tp: TimeProgression::new(Duration::from_secs_f32(
+										0.05 * dist_to_target as f32,
+									)),
+								});
+								audio_player.play_sound_effect(SoundEffect::Pew);
 							}
 
 							found_an_tower_to_make_play = true;

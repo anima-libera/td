@@ -178,27 +178,52 @@ impl std::ops::Sub<CoordsDelta> for Dimensions {
 }
 impl Dimensions {
 	pub fn iter(self) -> IterCoordsRect {
-		IterCoordsRect::with_rect(Rect { top_left: (0, 0).into(), dims: self })
+		IterCoordsRect::new(
+			Rect { top_left: (0, 0).into(), dims: self },
+			IterCoordsRectOrder::TopToBottomThenLeftToRight,
+		)
+	}
+	pub fn iter_left_to_right(self) -> IterCoordsRect {
+		IterCoordsRect::new(
+			Rect { top_left: (0, 0).into(), dims: self },
+			IterCoordsRectOrder::LeftToRightThenTopToBottom,
+		)
 	}
 }
 
 pub struct IterCoordsRect {
 	current: Coords,
 	rect: Rect,
+	order: IterCoordsRectOrder,
+}
+enum IterCoordsRectOrder {
+	TopToBottomThenLeftToRight,
+	LeftToRightThenTopToBottom,
 }
 impl IterCoordsRect {
-	pub fn with_rect(rect: Rect) -> IterCoordsRect {
-		IterCoordsRect { current: rect.top_left, rect }
+	fn new(rect: Rect, order: IterCoordsRectOrder) -> IterCoordsRect {
+		IterCoordsRect { current: rect.top_left, rect, order }
 	}
 }
 impl Iterator for IterCoordsRect {
 	type Item = Coords;
 	fn next(&mut self) -> Option<Coords> {
 		let coords = self.current;
-		self.current.x += 1;
-		if !self.rect.contains(self.current) {
-			self.current.x = self.rect.left();
-			self.current.y += 1;
+		match self.order {
+			IterCoordsRectOrder::TopToBottomThenLeftToRight => {
+				self.current.x += 1;
+				if !self.rect.contains(self.current) {
+					self.current.x = self.rect.left();
+					self.current.y += 1;
+				}
+			},
+			IterCoordsRectOrder::LeftToRightThenTopToBottom => {
+				self.current.y += 1;
+				if !self.rect.contains(self.current) {
+					self.current.y = self.rect.top();
+					self.current.x += 1;
+				}
+			},
 		}
 		if self.rect.contains(coords) {
 			Some(coords)
@@ -246,7 +271,7 @@ impl Rect {
 	}
 
 	pub fn iter(self) -> IterCoordsRect {
-		IterCoordsRect::with_rect(self)
+		IterCoordsRect::new(self, IterCoordsRectOrder::TopToBottomThenLeftToRight)
 	}
 
 	pub fn _add_margin(self, margin: i32) -> Rect {
