@@ -681,6 +681,7 @@ fn main() {
 		Player,
 		Enemy,
 		Tower,
+		GameOver,
 	}
 	let mut phase = Phase::Player;
 
@@ -818,15 +819,17 @@ fn main() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
 						if let Some(Path { forward, .. }) = map.grid.get(coords).unwrap().path() {
 							let dst_coords = coords + *forward;
-							current_animation = Some(Animation {
-								action: Action::Move {
-									obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
-									from: coords,
-									to: dst_coords,
-								},
-								tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-							});
-							end_player_phase_after_animation = true;
+							if map.grid.get(dst_coords).unwrap().obj.is_none() {
+								current_animation = Some(Animation {
+									action: Action::Move {
+										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+										from: coords,
+										to: dst_coords,
+									},
+									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+								});
+								end_player_phase_after_animation = true;
+							}
 							break;
 						}
 					}
@@ -971,28 +974,47 @@ fn main() {
 			)
 			.unwrap();
 
-			Font {
-				size_factor: 3,
-				horizontal_spacing: 2,
-				space_width: 7,
-				foreground: Color::WHITE,
-				background: None,
-				margins: (0, 0).into(),
+			if phase != Phase::GameOver {
+				Font {
+					size_factor: 3,
+					horizontal_spacing: 2,
+					space_width: 7,
+					foreground: Color::WHITE,
+					background: None,
+					margins: (0, 0).into(),
+				}
+				.draw_text_line(
+					&mut renderer,
+					&format!(
+						"{} phase",
+						match phase {
+							Phase::Player => "player",
+							Phase::Enemy => "enemy",
+							Phase::Tower => "tower",
+							_ => panic!("should not be here then"),
+						}
+					),
+					(0, 90).into(),
+					PinPoint::TOP_LEFT,
+				)
+				.unwrap();
+			} else {
+				Font {
+					size_factor: 6,
+					horizontal_spacing: 4,
+					space_width: 15,
+					foreground: Color::rgb_u8(255, 0, 0),
+					background: None,
+					margins: (0, 0).into(),
+				}
+				.draw_text_line(
+					&mut renderer,
+					"game over >_<",
+					(0, 90).into(),
+					PinPoint::TOP_LEFT,
+				)
+				.unwrap();
 			}
-			.draw_text_line(
-				&mut renderer,
-				&format!(
-					"{} phase",
-					match phase {
-						Phase::Player => "player",
-						Phase::Enemy => "enemy",
-						Phase::Tower => "tower",
-					}
-				),
-				(0, 90).into(),
-				PinPoint::TOP_LEFT,
-			)
-			.unwrap();
 
 			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
 			let map_left = -(camera_x * 8.0 * 8.0) as i32;
@@ -1186,11 +1208,12 @@ fn main() {
 								panic!("enemy not on a path")
 							};
 							let dst_coords = coords + backward;
-							if map
-								.grid
-								.get(dst_coords)
-								.is_some_and(|dst_tile| dst_tile.obj.is_none())
-							{
+							if map.grid.get(dst_coords).is_some_and(|dst_tile| {
+								dst_tile.obj.is_none()
+									|| dst_tile.obj.as_ref().is_some_and(|obj| {
+										matches!(obj, Obj::Caravan | Obj::TowerBasic { .. })
+									})
+							}) {
 								current_animation = Some(Animation {
 									action: Action::Move {
 										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
@@ -1295,8 +1318,20 @@ fn main() {
 						}
 					}
 					if !found_an_tower_to_make_play {
-						phase = Phase::Player;
-						turn_counter += 1;
+						let the_caravan_is_still_there = 'search_the_caravan: {
+							for coords in map.grid.dims.iter() {
+								if map.grid.get(coords).unwrap().has_caravan() {
+									break 'search_the_caravan true;
+								}
+							}
+							false
+						};
+						if the_caravan_is_still_there {
+							phase = Phase::Player;
+							turn_counter += 1;
+						} else {
+							phase = Phase::GameOver;
+						}
 					}
 				}
 			}
