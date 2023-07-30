@@ -338,7 +338,9 @@ impl Map {
 		}
 		for y in 0..self.grid.dims.h {
 			let coords: Coords = (self.grid.dims.w - 1, y).into();
-			if let Ground::Path(Path { distance, .. }) = self.grid.get(coords).unwrap().ground {
+			if let Ground::Path(Path { forward: CoordsDelta::RIGHT, distance, .. }) =
+				self.grid.get(coords).unwrap().ground
+			{
 				return Some((y, distance));
 			}
 		}
@@ -482,31 +484,87 @@ impl Chunk {
 				.unwrap_or_else(|| (rand_range(0..grid.dims.h), 0));
 			let mut prev_head: Coords = (-1, path_y).into();
 			let mut cur_head: Coords = (0, path_y).into();
+			let mut last_direction: CoordsDelta = (1, 0).into();
+			let mut how_many_times_does_it_go_westward = 0;
+			let mut distance_in_chunk = 0;
+			let mut it_turned_last_tile = false;
+			let mut u_turn_count = 0;
 			loop {
-				if cur_head.x == grid.dims.w - 1 {
-					let backward = prev_head - cur_head;
-					grid.get_mut(cur_head).unwrap().ground =
-						Ground::Path(Path { forward: (1, 0).into(), backward, distance: path_dist });
-					break;
-				}
-
-				let direction = CoordsDelta::iter_4_directions()
-					.nth(rand_range(0..4))
-					.unwrap();
-				if grid
-					.get(cur_head + direction)
-					.is_some_and(|tile| !tile.has_path())
-				{
+				let possible_directions: Vec<_> = CoordsDelta::iter_4_directions()
+					.filter(|direction| {
+						grid
+							.get(cur_head + *direction)
+							.is_some_and(|tile| !tile.has_path() && tile.obj.is_none())
+							|| (cur_head + *direction).x == grid.dims.w
+					})
+					.collect();
+				if possible_directions.is_empty() {
+					continue 'try_new_path;
+				} else {
+					let direction =
+						if possible_directions.contains(&last_direction) && rand_range(0.0..1.0) < 0.05 {
+							last_direction
+						} else {
+							possible_directions[rand_range(0..possible_directions.len())]
+						};
 					let backward = prev_head - cur_head;
 					let forward = direction;
 					grid.get_mut(cur_head).unwrap().ground =
 						Ground::Path(Path { forward, backward, distance: path_dist });
+					let it_turns_now =
+						!((backward.dx == 0 && forward.dx == 0) || (backward.dy == 0 && forward.dy == 0));
+					if it_turned_last_tile && it_turns_now {
+						u_turn_count += 1;
+					}
+					if it_turned_last_tile {
+						// Plant some trees in the corner of turns to prevent boring U-turns.
+						for other_direction in CoordsDelta::iter_4_directions() {
+							if other_direction != direction && rand_range(0.0..1.0) < 0.95 {
+								let other_coords = cur_head + other_direction;
+								if let Some(other_tile) = grid.get_mut(other_coords) {
+									if other_tile.is_empty_grass() {
+										other_tile.obj = Some(Obj::Tree);
+									}
+								}
+							}
+						}
+					}
+					it_turned_last_tile = it_turns_now;
 					path_dist += 1;
+					distance_in_chunk += 1;
+					if direction == CoordsDelta::from((-1, 0)) {
+						how_many_times_does_it_go_westward += 1;
+					}
+					last_direction = direction;
 					prev_head = cur_head;
 					cur_head += direction;
-				} else {
-					continue 'try_new_path;
+					let force_turn_probability = if cur_head.y == 0 || cur_head.y == grid.dims.h - 1 {
+						0.3
+					} else {
+						0.1
+					};
+					if rand_range(0.0..1.0) < force_turn_probability {
+						let other_coords = cur_head + direction;
+						if let Some(other_tile) = grid.get_mut(other_coords) {
+							if other_tile.is_empty_grass() {
+								other_tile.obj = Some(Obj::Tree);
+							}
+						}
+					}
+					if cur_head.x == grid.dims.w {
+						break;
+					}
 				}
+			}
+			if how_many_times_does_it_go_westward < 2
+				|| !(14..30).contains(&distance_in_chunk)
+				|| u_turn_count >= 2
+			{
+				continue 'try_new_path;
+			}
+			// Clean up the trees we planted just to help with path generation.
+			for coords in grid.dims.iter() {
+				grid.get_mut(coords).unwrap().obj = None;
 			}
 			break grid;
 		};
