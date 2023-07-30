@@ -576,11 +576,11 @@ impl Chunk {
 		for coords in grid.dims.iter() {
 			let tile = grid.get_mut(coords).unwrap();
 			if tile.has_path() {
-				let enemy_probability = 0.1;
+				let enemy_probability = 0.4;
 				if rand_range(0.0..1.0) < enemy_probability {
 					tile.obj = Some(Obj::EnemyBasic {
 						can_play: false,
-						hp: 6,
+						hp: 8,
 						alive_animation: None,
 						colored_animation: None,
 					});
@@ -686,6 +686,7 @@ fn main() {
 	let mut phase = Phase::Player;
 
 	let mut turn_counter = 0;
+	let mut distance_traveled = 0;
 	let mut crystal_amount = 20;
 
 	let mut current_animation: Option<Animation> = None;
@@ -817,8 +818,10 @@ fn main() {
 			} if current_animation.is_none() && phase == Phase::Player => {
 				for coords in map.grid.dims.iter() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
-						if let Some(Path { forward, .. }) = map.grid.get(coords).unwrap().path() {
-							let dst_coords = coords + *forward;
+						if let Some(Path { forward, distance, .. }) =
+							map.grid.get(coords).unwrap().path().cloned()
+						{
+							let dst_coords = coords + forward;
 							if map.grid.get(dst_coords).unwrap().obj.is_none() {
 								current_animation = Some(Animation {
 									action: Action::Move {
@@ -828,6 +831,7 @@ fn main() {
 									},
 									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 								});
+								distance_traveled = distance + 1;
 								end_player_phase_after_animation = true;
 							}
 							break;
@@ -929,22 +933,24 @@ fn main() {
 			)
 			.unwrap();
 
+			let font_white_3 = Font {
+				size_factor: 3,
+				horizontal_spacing: 2,
+				space_width: 7,
+				foreground: Color::WHITE,
+				background: None,
+				margins: (0, 0).into(),
+			};
+
 			{
-				let text_rect = Font {
-					size_factor: 3,
-					horizontal_spacing: 2,
-					space_width: 7,
-					foreground: Color::WHITE,
-					background: None,
-					margins: (0, 0).into(),
-				}
-				.draw_text_line(
-					&mut renderer,
-					&format!("{crystal_amount}"),
-					(0, 30).into(),
-					PinPoint::TOP_LEFT,
-				)
-				.unwrap();
+				let text_rect = font_white_3
+					.draw_text_line(
+						&mut renderer,
+						&format!("{crystal_amount}"),
+						(0, 30).into(),
+						PinPoint::TOP_LEFT,
+					)
+					.unwrap();
 				let crystal_symbol_dst = Rect::xywh(
 					text_rect.right_excluded() + 5,
 					text_rect.top() - 8 * 3 / 2 + text_rect.dims.h / 2,
@@ -958,46 +964,40 @@ fn main() {
 				);
 			}
 
-			Font {
-				size_factor: 3,
-				horizontal_spacing: 2,
-				space_width: 7,
-				foreground: Color::WHITE,
-				background: None,
-				margins: (0, 0).into(),
-			}
-			.draw_text_line(
-				&mut renderer,
-				&format!("turn {turn_counter}"),
-				(0, 60).into(),
-				PinPoint::TOP_LEFT,
-			)
-			.unwrap();
-
-			if phase != Phase::GameOver {
-				Font {
-					size_factor: 3,
-					horizontal_spacing: 2,
-					space_width: 7,
-					foreground: Color::WHITE,
-					background: None,
-					margins: (0, 0).into(),
-				}
+			font_white_3
 				.draw_text_line(
 					&mut renderer,
-					&format!(
-						"{} phase",
-						match phase {
-							Phase::Player => "player",
-							Phase::Enemy => "enemy",
-							Phase::Tower => "tower",
-							_ => panic!("should not be here then"),
-						}
-					),
-					(0, 90).into(),
+					&format!("turn {turn_counter}"),
+					(0, 60).into(),
 					PinPoint::TOP_LEFT,
 				)
 				.unwrap();
+			font_white_3
+				.draw_text_line(
+					&mut renderer,
+					&format!("traveled {distance_traveled} tiles"),
+					(0, 80).into(),
+					PinPoint::TOP_LEFT,
+				)
+				.unwrap();
+
+			if phase != Phase::GameOver {
+				font_white_3
+					.draw_text_line(
+						&mut renderer,
+						&format!(
+							"{} phase",
+							match phase {
+								Phase::Player => "player",
+								Phase::Enemy => "enemy",
+								Phase::Tower => "tower",
+								_ => panic!("should not be here then"),
+							}
+						),
+						(0, 110).into(),
+						PinPoint::TOP_LEFT,
+					)
+					.unwrap();
 			} else {
 				Font {
 					size_factor: 6,
@@ -1010,7 +1010,7 @@ fn main() {
 				.draw_text_line(
 					&mut renderer,
 					"game over >_<",
-					(0, 90).into(),
+					(0, 110).into(),
 					PinPoint::TOP_LEFT,
 				)
 				.unwrap();
@@ -1245,7 +1245,14 @@ fn main() {
 						};
 						let spawn_tile = map.grid.get_mut(spawn_coords).unwrap();
 						if spawn_tile.obj.is_none() && rand_range(0.0..1.0) < 0.4 {
-							let hp = if rand_range(0.0..1.0) < 0.3 { 8 } else { 6 };
+							let rand = rand_range(0.0..1.0);
+							let hp = if rand < 0.1 {
+								12
+							} else if rand < 0.3 {
+								10
+							} else {
+								8
+							};
 							spawn_tile.obj = Some(Obj::EnemyBasic {
 								can_play: false,
 								hp,
