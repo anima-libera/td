@@ -31,6 +31,7 @@ mod rodio_wrapper {
 	pub enum SoundEffect {
 		Pew,
 		Hit,
+		Step,
 	}
 
 	impl SoundEffect {
@@ -38,6 +39,7 @@ mod rodio_wrapper {
 			match self {
 				SoundEffect::Pew => include_bytes!("../assets/sounds/pew01.wav").as_slice(),
 				SoundEffect::Hit => include_bytes!("../assets/sounds/hit01.wav").as_slice(),
+				SoundEffect::Step => include_bytes!("../assets/sounds/step01.wav").as_slice(),
 			}
 		}
 
@@ -45,6 +47,7 @@ mod rodio_wrapper {
 			match self {
 				SoundEffect::Pew => 0.4,
 				SoundEffect::Hit => 0.4,
+				SoundEffect::Step => 0.05,
 			}
 		}
 	}
@@ -1280,6 +1283,7 @@ fn main() {
 									},
 									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 								});
+								audio_player.play_sound_effect(SoundEffect::Step);
 							}
 						}
 					} else {
