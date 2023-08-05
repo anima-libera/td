@@ -226,6 +226,7 @@ impl Map {
 				// By flipping them around various axes we can draw all the cases.
 				let sprite_straight = (4, 0);
 				let sprite_turn = (5, 0);
+				/// Checks for one of the 4 possible L-turns.
 				fn is_turn(
 					forward: CoordsDelta,
 					backward: CoordsDelta,
@@ -272,22 +273,20 @@ impl Map {
 				// This is done to give a sense of depth (the water level is thus
 				// percieved as a bit below ground level).
 				let there_is_water_on_the_top =
-					if let Some(tile_on_the_top) = self.grid.get(coords + CoordsDelta::from((0, -1))) {
+					if let Some(tile_on_the_top) = self.grid.get(coords + (0, -1).into()) {
 						tile_on_the_top.has_water()
 					} else {
 						false
 					};
-				let there_is_nothing_on_the_top =
-					self.grid.get(coords + CoordsDelta::from((0, -1))).is_none();
-				let there_is_ground_on_the_top_left_corner = if let Some(tile_on_the_top_left_corner) =
-					self.grid.get(coords + CoordsDelta::from((-1, -1)))
-				{
-					!tile_on_the_top_left_corner.has_water()
-				} else {
-					false
-				};
+				let there_is_nothing_on_the_top = self.grid.get(coords + (0, -1).into()).is_none();
+				let there_is_ground_on_the_top_left_corner =
+					if let Some(tile_on_the_top_left_corner) = self.grid.get(coords + (-1, -1).into()) {
+						!tile_on_the_top_left_corner.has_water()
+					} else {
+						false
+					};
 				let there_is_water_on_the_left =
-					if let Some(tile_on_the_left) = self.grid.get(coords + CoordsDelta::from((-1, 0))) {
+					if let Some(tile_on_the_left) = self.grid.get(coords + (-1, 0).into()) {
 						tile_on_the_left.has_water()
 					} else {
 						true
@@ -573,7 +572,7 @@ impl Chunk {
 		};
 
 		// Generate some water.
-		while rand_range(0..3) == 0 {
+		while rand_range(0.0..1.0) < 0.4 {
 			let mut coords = (rand_range(0..grid.dims.w), rand_range(0..grid.dims.h)).into();
 			loop {
 				let tile = grid.get_mut(coords).unwrap();
@@ -619,17 +618,24 @@ impl Chunk {
 
 		// Generate some crystals.
 		let dims = grid.dims;
-		for coords in grid.dims.iter() {
-			let tile = grid.get_mut(coords).unwrap();
-			if tile.is_empty_grass() {
-				let crystal_probability = if coords.y == 1 || coords.y == dims.h - 2 {
-					0.03
-				} else {
-					0.006
-				};
-				if rand_range(0.0..1.0) < crystal_probability {
-					tile.obj = Some(Obj::Crystal);
+		let mut crystal_count = 0;
+		for _i in 0..30 {
+			for coords in grid.dims.iter() {
+				let tile = grid.get_mut(coords).unwrap();
+				if tile.is_empty_grass() {
+					let crystal_probability = if coords.y == 1 || coords.y == dims.h - 2 {
+						0.03
+					} else {
+						0.006
+					};
+					if rand_range(0.0..1.0) < crystal_probability {
+						tile.obj = Some(Obj::Crystal);
+						crystal_count += 1;
+					}
 				}
+			}
+			if crystal_count >= 1 {
+				break;
 			}
 		}
 
