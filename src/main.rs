@@ -334,6 +334,16 @@ impl Map {
 		}
 	}
 
+	fn caravan_coords_and_tile(&self) -> Option<(Coords, &Tile)> {
+		for coords in self.grid.dims.iter() {
+			let tile = self.grid.get(coords).unwrap();
+			if tile.has_caravan() {
+				return Some((coords, tile));
+			}
+		}
+		None
+	}
+
 	fn rightmost_path_y_and_dist(&self) -> Option<(i32, i32)> {
 		if self.grid.dims.w == 0 {
 			return None;
@@ -752,6 +762,14 @@ fn main() {
 	}
 	let mut phase = Phase::Player;
 
+	#[derive(PartialEq, Eq)]
+	enum InterfaceMode {
+		Normal,
+		MovingCaravanChoosingDst,
+		MovingCaravanAnimation { remaining_moves: i32 },
+	}
+	let mut interface_mode = InterfaceMode::Normal;
+
 	let mut turn_counter = 0;
 	let mut distance_traveled = 0;
 	let mut crystal_amount = 20;
@@ -829,7 +847,11 @@ fn main() {
 				{
 					let tile = map.grid.get(selected_tile_coords.unwrap()).unwrap().clone();
 					let tower_price = 10;
-					if tile.obj.is_none() && !tile.has_water() && crystal_amount >= tower_price {
+					if tile.obj.is_none()
+						&& !tile.has_water()
+						&& crystal_amount >= tower_price
+						&& interface_mode == InterfaceMode::Normal
+					{
 						// Place a tower on empty ground.
 						current_animation = Some(Animation {
 							action: Action::Appear {
@@ -842,7 +864,7 @@ fn main() {
 						end_player_phase_after_animation = true;
 					} else if matches!(tile.obj, Some(Obj::Crystal))
 						&& current_animation.is_none()
-						&& phase == Phase::Player
+						&& interface_mode == InterfaceMode::Normal
 					{
 						// Mine the crystal.
 						current_animation = Some(Animation {
@@ -860,9 +882,31 @@ fn main() {
 						});
 						crystal_amount += 30;
 						end_player_phase_after_animation = true;
+					} else if matches!(tile.obj, Some(Obj::Caravan))
+						&& current_animation.is_none()
+						&& interface_mode == InterfaceMode::Normal
+					{
+						interface_mode = InterfaceMode::MovingCaravanChoosingDst;
 					}
-				} else {
+				} else if interface_mode == InterfaceMode::MovingCaravanChoosingDst
+					&& hovered_tile_coords.is_some()
+				{
+					let dst_tile = map.grid.get(hovered_tile_coords.unwrap()).unwrap().clone();
+					let dst_dist = dst_tile.path().unwrap().distance;
+					let src_dist = map
+						.caravan_coords_and_tile()
+						.unwrap()
+						.1
+						.path()
+						.unwrap()
+						.distance;
+					let move_dist = dst_dist - src_dist;
+					interface_mode =
+						InterfaceMode::MovingCaravanAnimation { remaining_moves: move_dist };
+				} else if interface_mode == InterfaceMode::Normal {
 					selected_tile_coords = hovered_tile_coords;
+				} else {
+					interface_mode = InterfaceMode::Normal;
 				}
 			},
 
@@ -1052,15 +1096,17 @@ fn main() {
 				font_white_3
 					.draw_text_line(
 						&mut renderer,
-						&format!(
-							"{} phase",
-							match phase {
-								Phase::Player => "player",
-								Phase::Enemy => "enemy",
-								Phase::Tower => "tower",
-								_ => panic!("should not be here then"),
-							}
-						),
+						match phase {
+							Phase::Player => match interface_mode {
+								InterfaceMode::MovingCaravanChoosingDst => {
+									"player phase: moving the caravan"
+								},
+								_ => "player phase",
+							},
+							Phase::Enemy => "enemy phase",
+							Phase::Tower => "tower phase",
+							_ => panic!("should not be here then"),
+						},
 						(0, 110).into(),
 						PinPoint::TOP_LEFT,
 					)
@@ -1129,6 +1175,44 @@ fn main() {
 					continue;
 				}
 				map.draw_tile_obj_at(&mut renderer, coords, dst);
+			}
+
+			if let InterfaceMode::MovingCaravanAnimation { remaining_moves } = interface_mode {
+				if current_animation.is_none() {
+					if remaining_moves <= 0 {
+						interface_mode = InterfaceMode::Normal;
+					} else {
+						let (caravan_coords, caravan_tile) = map.caravan_coords_and_tile().unwrap();
+						let distance = caravan_tile.path().unwrap().distance;
+						let forward = map
+							.grid
+							.get(caravan_coords)
+							.unwrap()
+							.path()
+							.unwrap()
+							.forward;
+						current_animation = Some(Animation {
+							action: Action::Move {
+								obj: map
+									.grid
+									.get_mut(caravan_coords)
+									.unwrap()
+									.obj
+									.take()
+									.unwrap(),
+								from: caravan_coords,
+								to: caravan_coords + forward,
+							},
+							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+						});
+						distance_traveled = distance + 1;
+						interface_mode =
+							InterfaceMode::MovingCaravanAnimation { remaining_moves: remaining_moves - 1 };
+						if remaining_moves == 1 {
+							end_player_phase_after_animation = true;
+						}
+					}
+				}
 			}
 
 			if let Some(anim) = &current_animation {
