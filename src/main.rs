@@ -25,13 +25,15 @@ mod rodio_wrapper {
 	use rodio::{Decoder, OutputStream, OutputStreamHandle, Source};
 	use std::io::{BufReader, Cursor};
 
-	/// Represent various sound effects embedded in the binary
+	/// Represents various sound effects embedded in the binary
 	/// that can be played by being passed to `AudioPlayer::play_sound_effect`.
 	#[derive(Clone, Copy)]
 	pub enum SoundEffect {
 		Pew,
 		Hit,
 		Step,
+		Mine,
+		Place,
 	}
 
 	impl SoundEffect {
@@ -40,6 +42,8 @@ mod rodio_wrapper {
 				SoundEffect::Pew => include_bytes!("../assets/sounds/pew01.wav").as_slice(),
 				SoundEffect::Hit => include_bytes!("../assets/sounds/hit01.wav").as_slice(),
 				SoundEffect::Step => include_bytes!("../assets/sounds/step01.wav").as_slice(),
+				SoundEffect::Mine => include_bytes!("../assets/sounds/mine01.wav").as_slice(),
+				SoundEffect::Place => include_bytes!("../assets/sounds/place01.wav").as_slice(),
 			}
 		}
 
@@ -47,7 +51,9 @@ mod rodio_wrapper {
 			match self {
 				SoundEffect::Pew => 0.4,
 				SoundEffect::Hit => 0.4,
-				SoundEffect::Step => 0.05,
+				SoundEffect::Step => 0.15,
+				SoundEffect::Mine => 0.3,
+				SoundEffect::Place => 0.6,
 			}
 		}
 	}
@@ -81,13 +87,21 @@ mod rodio_wrapper {
 }
 use crate::rodio_wrapper::*;
 
+/// A path tile info.
+/// The path is an oriented non-crossing line of tiles, over which the caravan and enemies move.
 #[derive(Clone)]
 struct Path {
+	/// The direction in which the caravan will move. An other path tile is expected there.
 	forward: CoordsDelta,
+	/// The direction in which the enemies will move. An other path tile is expected there.
 	backward: CoordsDelta,
+	/// The distance in tiles, along the path, from the left-most path tile.
+	/// Moving `forward` leads to a path tile with an incremented `distance`,
+	/// and `backward` leads to a decremented `distance`.
 	distance: i32,
 }
 
+/// The ground of a tile doesn't move (unlike `Obj`s).
 #[derive(Clone)]
 enum Ground {
 	Grass { visual_variant: u32 },
@@ -143,19 +157,17 @@ impl TimeProgression {
 	}
 }
 
-/// Squishes a little to appear more alive than rocks.
 #[derive(Clone)]
-struct AliveAnimation {
-	tp: TimeProgression,
+enum Tower {
+	Basic,
 }
 
-/// Appear a certain color for a short time, for example flashing red when hit.
 #[derive(Clone)]
-struct ColoredAnimation {
-	tp: TimeProgression,
-	color: Color,
+enum Enemy {
+	Basic,
 }
 
+/// An object that can be on a tile and maybe move or do stuff.
 #[derive(Clone)]
 enum Obj {
 	Caravan,
@@ -164,17 +176,36 @@ enum Obj {
 		visual_variant: u32,
 	},
 	Crystal,
-	EnemyBasic {
+	Enemy {
 		can_play: bool,
 		hp: i32,
 		alive_animation: Option<AliveAnimation>,
 		colored_animation: Option<ColoredAnimation>,
+		#[allow(dead_code)] // It will be used pretty soon!
+		variant: Enemy,
 	},
-	TowerBasic {
+	Tower {
 		can_play: bool,
+		#[allow(dead_code)] // It will be used pretty soon!
+		variant: Tower,
 	},
 }
 
+/// Small object animation: Squishes a little to appear more alive than rocks.
+#[derive(Clone)]
+struct AliveAnimation {
+	tp: TimeProgression,
+}
+
+/// Small object animation: Appear a certain color for a short time,
+/// for example flashing red when hit.
+#[derive(Clone)]
+struct ColoredAnimation {
+	tp: TimeProgression,
+	color: Color,
+}
+
+/// Tile ^^.
 #[derive(Clone)]
 struct Tile {
 	ground: Ground,
@@ -197,7 +228,7 @@ impl Tile {
 		self
 			.obj
 			.as_ref()
-			.is_some_and(|obj| matches!(obj, Obj::EnemyBasic { .. }))
+			.is_some_and(|obj| matches!(obj, Obj::Enemy { .. }))
 	}
 	fn is_empty_grass(&self) -> bool {
 		self.obj.is_none() && self.ground.is_grass()
@@ -213,6 +244,10 @@ struct Map {
 }
 
 impl Map {
+	/// Draws the ground of the tile designated by the given `coords` to `dst` in the pixel buffer.
+	///
+	/// The drawing of some types of ground depends on the surrounding tiles, which is why
+	/// this is a method of `Map` instead of `Ground`.
 	fn draw_tile_ground_at(&self, renderer: &mut Renderer, coords: Coords, dst: Rect) {
 		let ground = self.grid.get(coords).unwrap().ground.clone();
 		match ground {
@@ -311,7 +346,7 @@ impl Map {
 		match self.grid.get(coords).and_then(|tile| tile.obj.as_ref()) {
 			None => {},
 			Some(obj) => {
-				draw_obj(renderer, obj, dst);
+				draw_obj(renderer, obj, dst, false);
 			},
 		}
 	}
@@ -319,7 +354,7 @@ impl Map {
 	fn inflict_damage_to_obj_at(&mut self, coords: Coords, damages: i32) {
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
-			Some(Obj::EnemyBasic { ref mut hp, ref mut colored_animation, .. }) => {
+			Some(Obj::Enemy { ref mut hp, ref mut colored_animation, .. }) => {
 				*hp -= damages;
 				*colored_animation = Some(ColoredAnimation {
 					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
@@ -367,38 +402,42 @@ impl Map {
 	}
 }
 
-fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
+fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect, disappearing: bool) {
+	let mut effects = DrawSpriteEffects::none();
+	if disappearing {
+		effects.paint = Some(Color::rgb_u8(255, 0, 0));
+	}
 	match obj {
 		Obj::Caravan => {
 			let sprite = Rect::tile((7, 2).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			renderer.draw_sprite(dst, sprite, effects);
 		},
 		Obj::Tree => {
 			let mut sprite = Rect::tile((4, 2).into(), 16);
 			sprite.top_left.y -= 16;
 			sprite.dims.h += 16;
-			dst.top_left.y -= 8 * 8;
-			dst.dims.h += 8 * 8;
-			dst.top_left.y -= 8 * 8 / 8;
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			dst.top_left.y -= dst.dims.h;
+			dst.dims.h += dst.dims.h;
+			dst.top_left.y -= dst.dims.h / 16;
+			renderer.draw_sprite(dst, sprite, effects);
 		},
 		Obj::Rock { visual_variant } => {
 			assert!(*visual_variant < 3);
 			let sprite = Rect::tile((*visual_variant as i32, 2).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			renderer.draw_sprite(dst, sprite, effects);
 		},
 		Obj::Crystal => {
 			let mut sprite = Rect::tile((3, 2).into(), 16);
 			sprite.top_left.y -= 16;
 			sprite.dims.h += 16;
-			dst.top_left.y -= 8 * 8;
-			dst.dims.h += 8 * 8;
-			dst.top_left.y -= 8 * 8 / 8;
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			dst.top_left.y -= dst.dims.h;
+			dst.dims.h += dst.dims.h;
+			dst.top_left.y -= dst.dims.h / 16;
+			renderer.draw_sprite(dst, sprite, effects);
 		},
-		Obj::EnemyBasic { hp, alive_animation, colored_animation, .. } => {
+		Obj::Enemy { hp, alive_animation, colored_animation, .. } => {
 			let sprite = Rect::tile((4, 8).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			let unsquished_dst = dst;
@@ -436,8 +475,9 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			} else {
 				None
 			};
-			let mut effects = DrawSpriteEffects::none();
-			effects.paint = color;
+			if let Some(color) = color {
+				effects.paint = Some(color);
+			}
 			renderer.draw_sprite(dst, sprite, effects);
 			// Now we render the hp counter of the enemy above it (centered),
 			// and we make it go up with the squishing during "alive" animations (because its cute!).
@@ -455,10 +495,10 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect) {
 			.draw_text_line(renderer, &format!("{hp}"), top_center, PinPoint::TOP_CENTER)
 			.unwrap();
 		},
-		Obj::TowerBasic { .. } => {
+		Obj::Tower { .. } => {
 			let sprite = Rect::tile((8, 4).into(), 16);
 			dst.top_left.y -= dst.dims.h * 2 / 16;
-			renderer.draw_sprite(dst, sprite, DrawSpriteEffects::none());
+			renderer.draw_sprite(dst, sprite, effects);
 		},
 	}
 }
@@ -475,6 +515,9 @@ struct Chunk {
 }
 
 impl Chunk {
+	/// Generates a new random chunk of world.
+	/// The path must continue from where it stopped at the right side of the previous chunk,
+	/// so we must pass that information via `last_path_y_and_dist`.
 	fn generate(last_path_y_and_dist: Option<(i32, i32)>) -> Chunk {
 		let mut grid = 'try_new_path: loop {
 			// Initialize with only grass.
@@ -655,11 +698,12 @@ impl Chunk {
 			if tile.has_path() {
 				let enemy_probability = 0.4;
 				if rand_range(0.0..1.0) < enemy_probability {
-					tile.obj = Some(Obj::EnemyBasic {
+					tile.obj = Some(Obj::Enemy {
 						can_play: false,
 						hp: 8,
 						alive_animation: None,
 						colored_animation: None,
+						variant: Enemy::Basic,
 					});
 				}
 			}
@@ -669,16 +713,34 @@ impl Chunk {
 	}
 }
 
-enum Action {
-	Move { obj: Obj, from: Coords, to: Coords },
-	CameraMoveX { from: f32, to: f32 },
-	Appear { obj: Obj, to: Coords },
-	Disappear { obj: Obj, from: Coords },
-	Shoot { from: Coords, to: Coords },
+/// An `AnimationAction` is some event that happens over a period (handled by an `Animation`).
+enum AnimationAction {
+	Move {
+		obj: Obj,
+		from: Coords,
+		to: Coords,
+	},
+	/// The camera moves on the X axis (normally only to the right).
+	CameraMoveX {
+		from: f32,
+		to: f32,
+	},
+	Appear {
+		obj: Obj,
+		to: Coords,
+	},
+	Disappear {
+		obj: Obj,
+		from: Coords,
+	},
+	Shoot {
+		from: Coords,
+		to: Coords,
+	},
 }
 
 struct Animation {
-	action: Action,
+	action: AnimationAction,
 	tp: TimeProgression,
 }
 
@@ -719,7 +781,7 @@ fn main() {
 		.build(&event_loop)
 		.unwrap();
 
-	// Center the window
+	// Center the window.
 	let screen_size = window.available_monitors().next().unwrap().size();
 	let window_outer_size = window.outer_size();
 	window.set_outer_position(winit::dpi::PhysicalPosition::new(
@@ -854,12 +916,13 @@ fn main() {
 					{
 						// Place a tower on empty ground.
 						current_animation = Some(Animation {
-							action: Action::Appear {
-								obj: Obj::TowerBasic { can_play: false },
+							action: AnimationAction::Appear {
+								obj: Obj::Tower { can_play: false, variant: Tower::Basic },
 								to: selected_tile_coords.unwrap(),
 							},
 							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 						});
+						audio_player.play_sound_effect(SoundEffect::Place);
 						crystal_amount -= tower_price;
 						end_player_phase_after_animation = true;
 					} else if matches!(tile.obj, Some(Obj::Crystal))
@@ -868,7 +931,7 @@ fn main() {
 					{
 						// Mine the crystal.
 						current_animation = Some(Animation {
-							action: Action::Disappear {
+							action: AnimationAction::Disappear {
 								obj: map
 									.grid
 									.get_mut(selected_tile_coords.unwrap())
@@ -880,6 +943,7 @@ fn main() {
 							},
 							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 						});
+						audio_player.play_sound_effect(SoundEffect::Mine);
 						crystal_amount += 30;
 						end_player_phase_after_animation = true;
 					} else if matches!(tile.obj, Some(Obj::Caravan))
@@ -935,7 +999,7 @@ fn main() {
 							let dst_coords = coords + forward;
 							if map.grid.get(dst_coords).unwrap().obj.is_none() {
 								current_animation = Some(Animation {
-									action: Action::Move {
+									action: AnimationAction::Move {
 										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
 										from: coords,
 										to: dst_coords,
@@ -961,7 +1025,7 @@ fn main() {
 				..
 			} if current_animation.is_none() && phase == Phase::Player => {
 				current_animation = Some(Animation {
-					action: Action::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
+					action: AnimationAction::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
 					tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 				});
 				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
@@ -1008,7 +1072,7 @@ fn main() {
 
 			// Enemy alive animations.
 			for coords in map.grid.dims.iter() {
-				if let Some(Obj::EnemyBasic { alive_animation, .. }) =
+				if let Some(Obj::Enemy { alive_animation, .. }) =
 					&mut map.grid.get_mut(coords).unwrap().obj
 				{
 					if let Some(anim) = alive_animation {
@@ -1028,21 +1092,409 @@ fn main() {
 
 			renderer.clear();
 
-			Font {
-				size_factor: 2,
-				horizontal_spacing: 2,
-				space_width: 7,
-				foreground: Color::WHITE,
-				background: Some(Color::BLACK),
-				margins: (3, 3).into(),
+			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
+			let map_left = -(camera_x * 8.0 * 8.0) as i32;
+
+			for coords in map.grid.dims.iter() {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+					continue;
+				}
+				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
-			.draw_text_line(
-				&mut renderer,
-				&format!("fps: {fps}"),
-				(0, 0).into(),
-				PinPoint::TOP_LEFT,
-			)
-			.unwrap();
+
+			if let Some(coords) = hovered_tile_coords {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
+			}
+			if let Some(coords) = selected_tile_coords {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 255, 80));
+			}
+
+			for coords in map.grid.dims.iter() {
+				let dst = Rect::xywh(
+					map_left + 8 * 8 * coords.x,
+					map_top + 8 * 8 * coords.y,
+					8 * 8,
+					8 * 8,
+				);
+				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+					continue;
+				}
+				map.draw_tile_obj_at(&mut renderer, coords, dst);
+			}
+
+			if let InterfaceMode::MovingCaravanAnimation { remaining_moves } = interface_mode {
+				if current_animation.is_none() {
+					if remaining_moves <= 0 {
+						interface_mode = InterfaceMode::Normal;
+					} else {
+						let (caravan_coords, caravan_tile) = map.caravan_coords_and_tile().unwrap();
+						let distance = caravan_tile.path().unwrap().distance;
+						let forward = map
+							.grid
+							.get(caravan_coords)
+							.unwrap()
+							.path()
+							.unwrap()
+							.forward;
+						current_animation = Some(Animation {
+							action: AnimationAction::Move {
+								obj: map
+									.grid
+									.get_mut(caravan_coords)
+									.unwrap()
+									.obj
+									.take()
+									.unwrap(),
+								from: caravan_coords,
+								to: caravan_coords + forward,
+							},
+							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+						});
+						distance_traveled = distance + 1;
+						interface_mode =
+							InterfaceMode::MovingCaravanAnimation { remaining_moves: remaining_moves - 1 };
+						if remaining_moves == 1 {
+							end_player_phase_after_animation = true;
+						}
+					}
+				}
+			}
+
+			if let Some(anim) = &current_animation {
+				if anim.tp.is_done() {
+					// The current animation is finished.
+					match current_animation.take().unwrap().action {
+						AnimationAction::Move { obj, to, .. } => {
+							map.grid.get_mut(to).unwrap().obj = Some(obj)
+						},
+						AnimationAction::CameraMoveX { to, .. } => camera_x = to,
+						AnimationAction::Appear { obj, to } => {
+							map.grid.get_mut(to).unwrap().obj = Some(obj)
+						},
+						AnimationAction::Disappear { .. } => {},
+						AnimationAction::Shoot { to, .. } => {
+							map.inflict_damage_to_obj_at(to, 1);
+							audio_player.play_sound_effect(SoundEffect::Hit);
+						},
+					}
+					if end_player_phase_after_animation {
+						end_player_phase_after_animation = false;
+						end_player_phase_right_now = false;
+						phase = Phase::Enemy;
+						for coords in map.grid.dims.iter() {
+							if let Some(Obj::Enemy { ref mut can_play, .. }) =
+								map.grid.get_mut(coords).unwrap().obj
+							{
+								*can_play = true;
+							}
+						}
+					}
+				} else {
+					let progress = anim.tp.progress();
+					match &anim.action {
+						AnimationAction::Move { obj, from, to } => {
+							let interp_x = {
+								let from_x = map_left + 8 * 8 * from.x;
+								let to_x = map_left + 8 * 8 * to.x;
+								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
+							};
+							let interp_y = {
+								let from_y = map_top + 8 * 8 * from.y;
+								let to_y = map_top + 8 * 8 * to.y;
+								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
+							};
+							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							draw_obj(&mut renderer, obj, dst, false);
+						},
+						AnimationAction::CameraMoveX { from, to } => {
+							camera_x = linear_interpolation(progress, *from, *to);
+
+							let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
+							let map_left = -(camera_x * 8.0 * 8.0) as i32;
+							let coords = Coords::from((
+								((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
+								((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
+							));
+							if map.grid.dims.contains(coords) {
+								hovered_tile_coords = Some(coords);
+							} else {
+								hovered_tile_coords = None;
+							}
+						},
+						AnimationAction::Appear { obj, to } => {
+							let mut dst = Rect::xywh(
+								map_left + 8 * 8 * to.x,
+								map_top + 8 * 8 * to.y,
+								8 * 8,
+								8 * 8,
+							);
+							dst.top_left.x += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.w = ((8 * 8) as f32 * progress) as i32;
+							dst.top_left.y += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
+							draw_obj(&mut renderer, obj, dst, false);
+						},
+						AnimationAction::Disappear { obj, from } => {
+							let dst = Rect::xywh(
+								map_left + 8 * 8 * from.x,
+								map_top + 8 * 8 * from.y,
+								8 * 8,
+								8 * 8,
+							);
+							draw_obj(&mut renderer, obj, dst, true);
+						},
+						AnimationAction::Shoot { from, to } => {
+							let interp_x = {
+								let from_x = map_left + 8 * 8 * from.x;
+								let to_x = map_left + 8 * 8 * to.x;
+								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
+							};
+							let interp_y = {
+								let from_y = map_top + 8 * 8 * from.y;
+								let to_y = map_top + 8 * 8 * to.y;
+								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
+							};
+							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							draw_shot(&mut renderer, dst);
+						},
+					}
+				}
+			} else if end_player_phase_right_now {
+				end_player_phase_after_animation = false;
+				end_player_phase_right_now = false;
+				phase = Phase::Enemy;
+				for coords in map.grid.dims.iter() {
+					if let Some(Obj::Enemy { ref mut can_play, .. }) =
+						map.grid.get_mut(coords).unwrap().obj
+					{
+						*can_play = true;
+					}
+				}
+			} else {
+				// There might be something to do now.
+				if phase == Phase::Enemy {
+					// The enemies shall play now.
+					// We make the enemies closer to the caravan play first so that they don't
+					// bump into each other too much.
+					// Closer to the caravan here means on a path tile with the smallest distance.
+					// First we find the coords of the closest enemy (if any).
+					let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
+					for coords in map.grid.dims.iter() {
+						let tile = map.grid.get(coords).unwrap();
+						if let Some(Obj::Enemy { can_play: true, .. }) = tile.obj {
+							if let Some(Path { distance, .. }) = tile.path() {
+								if min_path_dist_and_coords.is_none()
+									|| min_path_dist_and_coords
+										.is_some_and(|(dist_min, _)| *distance < dist_min)
+								{
+									min_path_dist_and_coords = Some((*distance, coords));
+								}
+							}
+						}
+					}
+					if let Some((_, coords)) = min_path_dist_and_coords {
+						// Found the closest enemy that hasn't played yet. This enemy plays now.
+						let tile = map.grid.get_mut(coords).unwrap();
+						if let Some(Obj::Enemy { can_play: ref mut can_play @ true, .. }) = tile.obj {
+							*can_play = false;
+							let backward = if let Some(Path { backward, .. }) = tile.path() {
+								*backward
+							} else {
+								panic!("enemy not on a path")
+							};
+							let dst_coords = coords + backward;
+							if map.grid.get(dst_coords).is_some_and(|dst_tile| {
+								dst_tile.obj.is_none()
+									|| dst_tile
+										.obj
+										.as_ref()
+										.is_some_and(|obj| matches!(obj, Obj::Caravan | Obj::Tower { .. }))
+							}) {
+								current_animation = Some(Animation {
+									action: AnimationAction::Move {
+										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+										from: coords,
+										to: dst_coords,
+									},
+									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+								});
+								audio_player.play_sound_effect(SoundEffect::Step);
+							}
+						}
+					} else {
+						// No enemies left to play.
+						// We finish some enemy buisness and get to next phase.
+
+						// Enemy spawn
+						while map.grid.dims.w * 8 * 8
+							<= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+						{
+							map.generate_chunk_on_the_right();
+						}
+						let spawn_coords: Coords = 'spawn_coords: {
+							let right = (camera_x + 1.0) as i32 + renderer.dims().w / (8 * 8);
+							for y in 0..map.grid.dims.h {
+								if map.grid.get((right, y).into()).unwrap().has_path() {
+									break 'spawn_coords (right, y).into();
+								}
+							}
+							panic!("no path one some column ?");
+						};
+						let spawn_tile = map.grid.get_mut(spawn_coords).unwrap();
+						if spawn_tile.obj.is_none() && rand_range(0.0..1.0) < 0.4 {
+							let rand = rand_range(0.0..1.0);
+							let hp = if rand < 0.1 {
+								12
+							} else if rand < 0.3 {
+								10
+							} else {
+								8
+							};
+							spawn_tile.obj = Some(Obj::Enemy {
+								can_play: false,
+								hp,
+								alive_animation: None,
+								colored_animation: None,
+								variant: Enemy::Basic,
+							});
+						}
+
+						// Get to next phase
+						phase = Phase::Tower;
+						for coords in map.grid.dims.iter() {
+							if let Some(Obj::Tower { ref mut can_play, .. }) =
+								map.grid.get_mut(coords).unwrap().obj
+							{
+								*can_play = true;
+							}
+						}
+					}
+				} else if phase == Phase::Tower {
+					// Towers gonna shoot!
+					let mut found_an_tower_to_make_play = false;
+					for coords in map.grid.dims.iter_left_to_right() {
+						let tile = map.grid.get_mut(coords).unwrap();
+						if let Some(Obj::Tower { can_play: ref mut can_play @ true, .. }) = tile.obj {
+							*can_play = false;
+
+							// Towers will shoot at the enemy that they see that is the closest to
+							// the caravan, it seems like a nice default heuristic.
+							let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
+							for direction in CoordsDelta::iter_4_directions() {
+								let mut view_coords = coords + direction;
+								loop {
+									let tile = map.grid.get(view_coords);
+									if tile.is_none() {
+										break;
+									}
+									let tile = tile.unwrap();
+									if tile.has_enemy() {
+										if let Some(Path { distance, .. }) = tile.path() {
+											if min_path_dist_and_coords.is_none()
+												|| min_path_dist_and_coords
+													.is_some_and(|(dist_min, _)| *distance < dist_min)
+											{
+												min_path_dist_and_coords = Some((*distance, view_coords));
+												break;
+											}
+										}
+									}
+									if tile.obj.is_some() {
+										break;
+									}
+									view_coords += direction;
+								}
+							}
+
+							if let Some((_, target_coords)) = min_path_dist_and_coords {
+								// Shoot!
+								let dist_to_target = coords.dist(target_coords);
+								current_animation = Some(Animation {
+									action: AnimationAction::Shoot { from: coords, to: target_coords },
+									tp: TimeProgression::new(Duration::from_secs_f32(
+										0.05 * dist_to_target as f32,
+									)),
+								});
+								audio_player.play_sound_effect(SoundEffect::Pew);
+							}
+
+							found_an_tower_to_make_play = true;
+							break;
+						}
+					}
+					if !found_an_tower_to_make_play {
+						let the_caravan_is_still_there = 'search_the_caravan: {
+							for coords in map.grid.dims.iter() {
+								if map.grid.get(coords).unwrap().has_caravan() {
+									break 'search_the_caravan true;
+								}
+							}
+							false
+						};
+						if the_caravan_is_still_there {
+							phase = Phase::Player;
+							turn_counter += 1;
+						} else {
+							phase = Phase::GameOver;
+						}
+					}
+				}
+			}
+
+			if display_path_dist {
+				for coords in map.grid.dims.iter() {
+					let dst = Rect::xywh(
+						map_left + 8 * 8 * coords.x,
+						map_top + 8 * 8 * coords.y,
+						8 * 8,
+						8 * 8,
+					);
+					if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
+						continue;
+					}
+					let distance = if let Ground::Path(Path { distance, .. }) =
+						map.grid.get(coords).unwrap().ground
+					{
+						distance
+					} else {
+						continue;
+					};
+					let center = dst.top_left + CoordsDelta::from(dst.dims) / 2;
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(80, 255, 255),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						&mut renderer,
+						&format!("{distance}"),
+						center,
+						PinPoint::CENTER_CENTER,
+					)
+					.unwrap();
+				}
+			}
 
 			let font_white_3 = Font {
 				size_factor: 3,
@@ -1129,408 +1581,64 @@ fn main() {
 				.unwrap();
 			}
 
-			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
-			let map_left = -(camera_x * 8.0 * 8.0) as i32;
-
-			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
-				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
-					continue;
-				}
-				map.draw_tile_ground_at(&mut renderer, coords, dst);
-			}
-
+			let map_bottom = map_top + 8 * 8 * map.grid.dims.h;
 			if let Some(coords) = hovered_tile_coords {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
-				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
-			}
-			if let Some(coords) = selected_tile_coords {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
-				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 255, 80));
-			}
-
-			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
-				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
-					continue;
-				}
+				let tile = map.grid.get(coords).unwrap();
+				let dst = Rect::xywh(10, map_bottom + 10, 8 * 8 * 2, 8 * 8 * 2);
+				map.draw_tile_ground_at(&mut renderer, coords, dst);
 				map.draw_tile_obj_at(&mut renderer, coords, dst);
-			}
-
-			if let InterfaceMode::MovingCaravanAnimation { remaining_moves } = interface_mode {
-				if current_animation.is_none() {
-					if remaining_moves <= 0 {
-						interface_mode = InterfaceMode::Normal;
-					} else {
-						let (caravan_coords, caravan_tile) = map.caravan_coords_and_tile().unwrap();
-						let distance = caravan_tile.path().unwrap().distance;
-						let forward = map
-							.grid
-							.get(caravan_coords)
-							.unwrap()
-							.path()
-							.unwrap()
-							.forward;
-						current_animation = Some(Animation {
-							action: Action::Move {
-								obj: map
-									.grid
-									.get_mut(caravan_coords)
-									.unwrap()
-									.obj
-									.take()
-									.unwrap(),
-								from: caravan_coords,
-								to: caravan_coords + forward,
-							},
-							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-						});
-						distance_traveled = distance + 1;
-						interface_mode =
-							InterfaceMode::MovingCaravanAnimation { remaining_moves: remaining_moves - 1 };
-						if remaining_moves == 1 {
-							end_player_phase_after_animation = true;
-						}
-					}
-				}
-			}
-
-			if let Some(anim) = &current_animation {
-				if anim.tp.is_done() {
-					// The current animation is finished.
-					match current_animation.take().unwrap().action {
-						Action::Move { obj, to, .. } => map.grid.get_mut(to).unwrap().obj = Some(obj),
-						Action::CameraMoveX { to, .. } => camera_x = to,
-						Action::Appear { obj, to } => map.grid.get_mut(to).unwrap().obj = Some(obj),
-						Action::Disappear { .. } => {},
-						Action::Shoot { to, .. } => {
-							map.inflict_damage_to_obj_at(to, 1);
-							audio_player.play_sound_effect(SoundEffect::Hit);
-						},
-					}
-					if end_player_phase_after_animation {
-						end_player_phase_after_animation = false;
-						end_player_phase_right_now = false;
-						phase = Phase::Enemy;
-						for coords in map.grid.dims.iter() {
-							if let Some(Obj::EnemyBasic { ref mut can_play, .. }) =
-								map.grid.get_mut(coords).unwrap().obj
-							{
-								*can_play = true;
-							}
-						}
-					}
-				} else {
-					let progress = anim.tp.progress();
-					match &anim.action {
-						Action::Move { obj, from, to } => {
-							let interp_x = {
-								let from_x = map_left + 8 * 8 * from.x;
-								let to_x = map_left + 8 * 8 * to.x;
-								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
-							};
-							let interp_y = {
-								let from_y = map_top + 8 * 8 * from.y;
-								let to_y = map_top + 8 * 8 * to.y;
-								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
-							};
-							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
-							draw_obj(&mut renderer, obj, dst);
-						},
-						Action::CameraMoveX { from, to } => {
-							camera_x = linear_interpolation(progress, *from, *to);
-
-							let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
-							let map_left = -(camera_x * 8.0 * 8.0) as i32;
-							let coords = Coords::from((
-								((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
-								((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
-							));
-							if map.grid.dims.contains(coords) {
-								hovered_tile_coords = Some(coords);
-							} else {
-								hovered_tile_coords = None;
-							}
-						},
-						Action::Appear { obj, to } => {
-							let mut dst = Rect::xywh(
-								map_left + 8 * 8 * to.x,
-								map_top + 8 * 8 * to.y,
-								8 * 8,
-								8 * 8,
-							);
-							dst.top_left.x += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.w = ((8 * 8) as f32 * progress) as i32;
-							dst.top_left.y += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
-							draw_obj(&mut renderer, obj, dst);
-						},
-						Action::Disappear { obj, from } => {
-							let mut dst = Rect::xywh(
-								map_left + 8 * 8 * from.x,
-								map_top + 8 * 8 * from.y,
-								8 * 8,
-								8 * 8,
-							);
-							dst.top_left.x += (((8 * 8) / 2) as f32 * progress) as i32;
-							dst.dims.w = ((8 * 8) as f32 * (1.0 - progress)) as i32;
-							dst.top_left.y += (((8 * 8) / 2) as f32 * progress) as i32;
-							dst.dims.h = ((8 * 8) as f32 * (1.0 - progress)) as i32;
-							draw_obj(&mut renderer, obj, dst);
-						},
-						Action::Shoot { from, to } => {
-							let interp_x = {
-								let from_x = map_left + 8 * 8 * from.x;
-								let to_x = map_left + 8 * 8 * to.x;
-								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
-							};
-							let interp_y = {
-								let from_y = map_top + 8 * 8 * from.y;
-								let to_y = map_top + 8 * 8 * to.y;
-								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
-							};
-							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
-							draw_shot(&mut renderer, dst);
-						},
-					}
-				}
-			} else if end_player_phase_right_now {
-				end_player_phase_after_animation = false;
-				end_player_phase_right_now = false;
-				phase = Phase::Enemy;
-				for coords in map.grid.dims.iter() {
-					if let Some(Obj::EnemyBasic { ref mut can_play, .. }) =
-						map.grid.get_mut(coords).unwrap().obj
-					{
-						*can_play = true;
-					}
-				}
-			} else {
-				// There might be something to do now.
-				if phase == Phase::Enemy {
-					// The enemies shall play now.
-					// We make the enemies closer to the caravan play first so that they don't
-					// bump into each other too much.
-					// Closer to the caravan here means on a path tile with the smallest distance.
-					// First we find the coords of the closest enemy (if any).
-					let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
-					for coords in map.grid.dims.iter() {
-						let tile = map.grid.get(coords).unwrap();
-						if let Some(Obj::EnemyBasic { can_play: true, .. }) = tile.obj {
-							if let Some(Path { distance, .. }) = tile.path() {
-								if min_path_dist_and_coords.is_none()
-									|| min_path_dist_and_coords
-										.is_some_and(|(dist_min, _)| *distance < dist_min)
-								{
-									min_path_dist_and_coords = Some((*distance, coords));
-								}
-							}
-						}
-					}
-					if let Some((_, coords)) = min_path_dist_and_coords {
-						// Found the closest enemy that hasn't played yet. This enemy plays now.
-						let tile = map.grid.get_mut(coords).unwrap();
-						if let Some(Obj::EnemyBasic { can_play: ref mut can_play @ true, .. }) = tile.obj
-						{
-							*can_play = false;
-							let backward = if let Some(Path { backward, .. }) = tile.path() {
-								*backward
-							} else {
-								panic!("enemy not on a path")
-							};
-							let dst_coords = coords + backward;
-							if map.grid.get(dst_coords).is_some_and(|dst_tile| {
-								dst_tile.obj.is_none()
-									|| dst_tile.obj.as_ref().is_some_and(|obj| {
-										matches!(obj, Obj::Caravan | Obj::TowerBasic { .. })
-									})
-							}) {
-								current_animation = Some(Animation {
-									action: Action::Move {
-										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
-										from: coords,
-										to: dst_coords,
-									},
-									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-								});
-								audio_player.play_sound_effect(SoundEffect::Step);
-							}
-						}
-					} else {
-						// No enemies left to play.
-						// We finish some enemy buisness and get to next phase.
-
-						// Enemy spawn
-						while map.grid.dims.w * 8 * 8
-							<= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
-						{
-							map.generate_chunk_on_the_right();
-						}
-						let spawn_coords: Coords = 'spawn_coords: {
-							let right = (camera_x + 1.0) as i32 + renderer.dims().w / (8 * 8);
-							for y in 0..map.grid.dims.h {
-								if map.grid.get((right, y).into()).unwrap().has_path() {
-									break 'spawn_coords (right, y).into();
-								}
-							}
-							panic!("no path one some column ?");
-						};
-						let spawn_tile = map.grid.get_mut(spawn_coords).unwrap();
-						if spawn_tile.obj.is_none() && rand_range(0.0..1.0) < 0.4 {
-							let rand = rand_range(0.0..1.0);
-							let hp = if rand < 0.1 {
-								12
-							} else if rand < 0.3 {
-								10
-							} else {
-								8
-							};
-							spawn_tile.obj = Some(Obj::EnemyBasic {
-								can_play: false,
-								hp,
-								alive_animation: None,
-								colored_animation: None,
-							});
-						}
-
-						// Get to next phase
-						phase = Phase::Tower;
-						for coords in map.grid.dims.iter() {
-							if let Some(Obj::TowerBasic { ref mut can_play }) =
-								map.grid.get_mut(coords).unwrap().obj
-							{
-								*can_play = true;
-							}
-						}
-					}
-				} else if phase == Phase::Tower {
-					// Towers gonna shoot!
-					let mut found_an_tower_to_make_play = false;
-					for coords in map.grid.dims.iter_left_to_right() {
-						let tile = map.grid.get_mut(coords).unwrap();
-						if let Some(Obj::TowerBasic { can_play: ref mut can_play @ true }) = tile.obj {
-							*can_play = false;
-
-							// Towers will shoot at the enemy that they see that is the closest to
-							// the caravan, it seems like a nice default heuristic.
-							let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
-							for direction in CoordsDelta::iter_4_directions() {
-								let mut view_coords = coords + direction;
-								loop {
-									let tile = map.grid.get(view_coords);
-									if tile.is_none() {
-										break;
-									}
-									let tile = tile.unwrap();
-									if tile.has_enemy() {
-										if let Some(Path { distance, .. }) = tile.path() {
-											if min_path_dist_and_coords.is_none()
-												|| min_path_dist_and_coords
-													.is_some_and(|(dist_min, _)| *distance < dist_min)
-											{
-												min_path_dist_and_coords = Some((*distance, view_coords));
-												break;
-											}
-										}
-									}
-									if tile.obj.is_some() {
-										break;
-									}
-									view_coords += direction;
-								}
-							}
-
-							if let Some((_, target_coords)) = min_path_dist_and_coords {
-								// Shoot!
-								let dist_to_target = coords.dist(target_coords);
-								current_animation = Some(Animation {
-									action: Action::Shoot { from: coords, to: target_coords },
-									tp: TimeProgression::new(Duration::from_secs_f32(
-										0.05 * dist_to_target as f32,
-									)),
-								});
-								audio_player.play_sound_effect(SoundEffect::Pew);
-							}
-
-							found_an_tower_to_make_play = true;
-							break;
-						}
-					}
-					if !found_an_tower_to_make_play {
-						let the_caravan_is_still_there = 'search_the_caravan: {
-							for coords in map.grid.dims.iter() {
-								if map.grid.get(coords).unwrap().has_caravan() {
-									break 'search_the_caravan true;
-								}
-							}
-							false
-						};
-						if the_caravan_is_still_there {
-							phase = Phase::Player;
-							turn_counter += 1;
-						} else {
-							phase = Phase::GameOver;
-						}
-					}
-				}
-			}
-
-			if display_path_dist {
-				for coords in map.grid.dims.iter() {
-					let dst = Rect::xywh(
-						map_left + 8 * 8 * coords.x,
-						map_top + 8 * 8 * coords.y,
-						8 * 8,
-						8 * 8,
-					);
-					if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
-						continue;
-					}
-					let distance = if let Ground::Path(Path { distance, .. }) =
-						map.grid.get(coords).unwrap().ground
-					{
-						distance
-					} else {
-						continue;
-					};
-					let center = dst.top_left + CoordsDelta::from(dst.dims) / 2;
-					Font {
-						size_factor: 3,
-						horizontal_spacing: 2,
-						space_width: 7,
-						foreground: Color::rgb_u8(80, 255, 255),
-						background: Some(Color::BLACK),
-						margins: (3, 3).into(),
-					}
+				let obj_name = tile.obj.as_ref().map(|obj| match obj {
+					Obj::Caravan => "caravan",
+					Obj::Enemy { variant, .. } => match variant {
+						Enemy::Basic => "basic enemy",
+					},
+					Obj::Rock { .. } => "rock",
+					Obj::Tower { variant, .. } => match variant {
+						Tower::Basic => "basic tower",
+					},
+					Obj::Tree => "tree",
+					Obj::Crystal => "crystal",
+				});
+				let ground_name = match tile.ground {
+					Ground::Grass { .. } => "grass",
+					Ground::Path(_) => "path",
+					Ground::Water => "water",
+				};
+				font_white_3
 					.draw_text_line(
 						&mut renderer,
-						&format!("{distance}"),
-						center,
-						PinPoint::CENTER_CENTER,
+						ground_name,
+						(10 + 8 * 8 * 2 + 10, map_bottom + 10).into(),
+						PinPoint::TOP_LEFT,
 					)
 					.unwrap();
+				if let Some(obj_name) = obj_name {
+					font_white_3
+						.draw_text_line(
+							&mut renderer,
+							obj_name,
+							(10 + 8 * 8 * 2 + 10, map_bottom + 10 + 20).into(),
+							PinPoint::TOP_LEFT,
+						)
+						.unwrap();
 				}
 			}
+
+			Font {
+				size_factor: 2,
+				horizontal_spacing: 2,
+				space_width: 7,
+				foreground: Color::WHITE,
+				background: Some(Color::BLACK),
+				margins: (3, 3).into(),
+			}
+			.draw_text_line(
+				&mut renderer,
+				&format!("fps: {fps}"),
+				(0, 0).into(),
+				PinPoint::TOP_LEFT,
+			)
+			.unwrap();
 
 			window.request_redraw();
 		},
