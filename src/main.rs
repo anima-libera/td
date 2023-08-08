@@ -735,7 +735,7 @@ enum AnimationAction {
 	},
 	Shoot {
 		from: Coords,
-		to: Coords,
+		direction: CoordsDelta,
 	},
 }
 
@@ -1180,6 +1180,8 @@ fn main() {
 
 			if let Some(anim) = &current_animation {
 				if anim.tp.is_done() {
+					let duration = anim.tp.duration;
+
 					// The current animation is finished.
 					match current_animation.take().unwrap().action {
 						AnimationAction::Move { obj, to, .. } => {
@@ -1190,9 +1192,19 @@ fn main() {
 							map.grid.get_mut(to).unwrap().obj = Some(obj)
 						},
 						AnimationAction::Disappear { .. } => {},
-						AnimationAction::Shoot { to, .. } => {
-							map.inflict_damage_to_obj_at(to, 1);
-							audio_player.play_sound_effect(SoundEffect::Hit);
+						AnimationAction::Shoot { from, direction } => {
+							let to = from + direction;
+							if map.grid.dims.contains(to) {
+								if map.grid.get(to).unwrap().obj.is_some() {
+									map.inflict_damage_to_obj_at(to, 1);
+									audio_player.play_sound_effect(SoundEffect::Hit);
+								} else {
+									current_animation = Some(Animation {
+										action: AnimationAction::Shoot { from: to, direction },
+										tp: TimeProgression { start: Instant::now(), duration },
+									});
+								}
+							}
 						},
 					}
 					if end_player_phase_after_animation {
@@ -1261,7 +1273,8 @@ fn main() {
 							);
 							draw_obj(&mut renderer, obj, dst, true);
 						},
-						AnimationAction::Shoot { from, to } => {
+						AnimationAction::Shoot { from, direction } => {
+							let to = *from + *direction;
 							let interp_x = {
 								let from_x = map_left + 8 * 8 * from.x;
 								let to_x = map_left + 8 * 8 * to.x;
@@ -1397,7 +1410,7 @@ fn main() {
 
 							// Towers will shoot at the enemy that they see that is the closest to
 							// the caravan, it seems like a nice default heuristic.
-							let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
+							let mut min_path_dist_and_dir: Option<(i32, CoordsDelta)> = None;
 							for direction in CoordsDelta::iter_4_directions() {
 								let mut view_coords = coords + direction;
 								loop {
@@ -1408,11 +1421,11 @@ fn main() {
 									let tile = tile.unwrap();
 									if tile.has_enemy() {
 										if let Some(Path { distance, .. }) = tile.path() {
-											if min_path_dist_and_coords.is_none()
-												|| min_path_dist_and_coords
+											if min_path_dist_and_dir.is_none()
+												|| min_path_dist_and_dir
 													.is_some_and(|(dist_min, _)| *distance < dist_min)
 											{
-												min_path_dist_and_coords = Some((*distance, view_coords));
+												min_path_dist_and_dir = Some((*distance, direction));
 												break;
 											}
 										}
@@ -1424,14 +1437,11 @@ fn main() {
 								}
 							}
 
-							if let Some((_, target_coords)) = min_path_dist_and_coords {
+							if let Some((_, direction)) = min_path_dist_and_dir {
 								// Shoot!
-								let dist_to_target = coords.dist(target_coords);
 								current_animation = Some(Animation {
-									action: AnimationAction::Shoot { from: coords, to: target_coords },
-									tp: TimeProgression::new(Duration::from_secs_f32(
-										0.05 * dist_to_target as f32,
-									)),
+									action: AnimationAction::Shoot { from: coords, direction },
+									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 								});
 								audio_player.play_sound_effect(SoundEffect::Pew);
 							}
