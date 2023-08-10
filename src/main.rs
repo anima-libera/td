@@ -186,6 +186,8 @@ enum Obj {
 	},
 	Tower {
 		can_play: bool,
+		hp: i32,
+		colored_animation: Option<ColoredAnimation>,
 		#[allow(dead_code)] // It will be used pretty soon!
 		variant: Tower,
 	},
@@ -203,6 +205,16 @@ struct AliveAnimation {
 struct ColoredAnimation {
 	tp: TimeProgression,
 	color: Color,
+}
+
+impl Obj {
+	fn hp(&self) -> Option<i32> {
+		match self {
+			Obj::Enemy { hp, .. } => Some(*hp),
+			Obj::Tower { hp, .. } => Some(*hp),
+			_ => None,
+		}
+	}
 }
 
 /// Tile ^^.
@@ -359,6 +371,14 @@ impl Map {
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
 			Some(Obj::Enemy { ref mut hp, ref mut colored_animation, .. }) => {
+				*hp -= damages;
+				*colored_animation = Some(ColoredAnimation {
+					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
+					color: Color::rgb_u8(255, 0, 0),
+				});
+				*hp <= 0
+			},
+			Some(Obj::Tower { ref mut hp, ref mut colored_animation, .. }) => {
 				*hp -= damages;
 				*colored_animation = Some(ColoredAnimation {
 					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
@@ -968,7 +988,12 @@ fn main() {
 						// Place a tower on empty ground.
 						current_animations.push(Animation {
 							action: AnimationAction::Appear {
-								obj: Obj::Tower { can_play: false, variant: Tower::Basic },
+								obj: Obj::Tower {
+									can_play: false,
+									hp: 3,
+									colored_animation: None,
+									variant: Tower::Basic,
+								},
 								to: selected_tile_coords.unwrap(),
 							},
 							tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
@@ -1655,6 +1680,7 @@ fn main() {
 					Obj::Tree => "tree",
 					Obj::Crystal => "crystal",
 				});
+				let obj_hp = tile.obj.as_ref().and_then(|obj| obj.hp());
 				let ground_name = match tile.ground {
 					Ground::Grass { .. } => "grass",
 					Ground::Path(_) => "path",
@@ -1674,6 +1700,16 @@ fn main() {
 							&mut renderer,
 							obj_name,
 							(10 + 8 * 8 * 2 + 10, map_bottom + 10 + 20).into(),
+							PinPoint::TOP_LEFT,
+						)
+						.unwrap();
+				}
+				if let Some(obj_hp) = obj_hp {
+					font_white_3
+						.draw_text_line(
+							&mut renderer,
+							&format!("hp: {obj_hp}"),
+							(10 + 8 * 8 * 2 + 10, map_bottom + 10 + 20 * 2).into(),
 							PinPoint::TOP_LEFT,
 						)
 						.unwrap();
