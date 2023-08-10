@@ -717,6 +717,21 @@ impl Chunk {
 	}
 }
 
+/// When a shot hits its target, it may (or may not) spawn new shots fro that target
+/// (for example to split in two shots that shoot on the sides, or a new shot in the same
+/// direction to look like a piercing shot, etc.).
+#[derive(Clone)]
+enum ShotCascade {
+	None,
+	SplitInTwo(Box<Shot>),
+}
+
+#[derive(Clone)]
+struct Shot {
+	damages: i32,
+	cascade: ShotCascade,
+}
+
 /// An `AnimationAction` is some event that happens over a period (handled by an `Animation`).
 enum AnimationAction {
 	Move {
@@ -740,6 +755,7 @@ enum AnimationAction {
 	Shoot {
 		from: Coords,
 		direction: CoordsDelta,
+		shot: Shot,
 	},
 }
 
@@ -875,7 +891,7 @@ fn main() {
 	let mut distance_traveled = 0;
 	let mut crystal_amount = 20;
 
-	let mut current_animation: Option<Animation> = None;
+	let mut current_animations: Vec<Animation> = vec![];
 	let mut end_player_phase_after_animation = false;
 	let mut end_player_phase_right_now = false;
 
@@ -939,7 +955,7 @@ fn main() {
 				#[allow(clippy::unnecessary_unwrap)] // `if let &&` is not stable yet you nincompoop
 				if selected_tile_coords.is_some()
 					&& selected_tile_coords == hovered_tile_coords
-					&& current_animation.is_none()
+					&& current_animations.is_empty()
 					&& phase == Phase::Player
 				{
 					let tile = map.grid.get(selected_tile_coords.unwrap()).unwrap().clone();
@@ -950,7 +966,7 @@ fn main() {
 						&& interface_mode == InterfaceMode::Normal
 					{
 						// Place a tower on empty ground.
-						current_animation = Some(Animation {
+						current_animations.push(Animation {
 							action: AnimationAction::Appear {
 								obj: Obj::Tower { can_play: false, variant: Tower::Basic },
 								to: selected_tile_coords.unwrap(),
@@ -961,11 +977,11 @@ fn main() {
 						crystal_amount -= tower_price;
 						end_player_phase_after_animation = true;
 					} else if matches!(tile.obj, Some(Obj::Crystal))
-						&& current_animation.is_none()
+						&& current_animations.is_empty()
 						&& interface_mode == InterfaceMode::Normal
 					{
 						// Mine the crystal.
-						current_animation = Some(Animation {
+						current_animations.push(Animation {
 							action: AnimationAction::Disappear {
 								obj: map
 									.grid
@@ -982,7 +998,7 @@ fn main() {
 						crystal_amount += 30;
 						end_player_phase_after_animation = true;
 					} else if matches!(tile.obj, Some(Obj::Caravan))
-						&& current_animation.is_none()
+						&& current_animations.is_empty()
 						&& interface_mode == InterfaceMode::Normal
 					{
 						interface_mode = InterfaceMode::MovingCaravanChoosingDst;
@@ -1025,7 +1041,7 @@ fn main() {
 						..
 					},
 				..
-			} if current_animation.is_none() && phase == Phase::Player => {
+			} if current_animations.is_empty() && phase == Phase::Player => {
 				for coords in map.grid.dims.iter() {
 					if map.grid.get(coords).is_some_and(|tile| tile.has_caravan()) {
 						if let Some(Path { forward, distance, .. }) =
@@ -1033,7 +1049,7 @@ fn main() {
 						{
 							let dst_coords = coords + forward;
 							if map.grid.get(dst_coords).unwrap().obj.is_none() {
-								current_animation = Some(Animation {
+								current_animations.push(Animation {
 									action: AnimationAction::Move {
 										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
 										from: coords,
@@ -1058,8 +1074,8 @@ fn main() {
 						..
 					},
 				..
-			} if current_animation.is_none() && phase == Phase::Player => {
-				current_animation = Some(Animation {
+			} if current_animations.is_empty() && phase == Phase::Player => {
+				current_animations.push(Animation {
 					action: AnimationAction::CameraMoveX {
 						from: map_drawing_config.camera_x,
 						to: map_drawing_config.camera_x + 1.0,
@@ -1082,7 +1098,7 @@ fn main() {
 						..
 					},
 				..
-			} if current_animation.is_none() && phase == Phase::Player => {
+			} if current_animations.is_empty() && phase == Phase::Player => {
 				end_player_phase_right_now = true;
 			},
 
@@ -1157,7 +1173,7 @@ fn main() {
 			}
 
 			if let InterfaceMode::MovingCaravanAnimation { remaining_moves } = interface_mode {
-				if current_animation.is_none() {
+				if current_animations.is_empty() {
 					if remaining_moves <= 0 {
 						interface_mode = InterfaceMode::Normal;
 					} else {
@@ -1170,7 +1186,7 @@ fn main() {
 							.path()
 							.unwrap()
 							.forward;
-						current_animation = Some(Animation {
+						current_animations.push(Animation {
 							action: AnimationAction::Move {
 								obj: map
 									.grid
@@ -1194,87 +1210,124 @@ fn main() {
 				}
 			}
 
-			if let Some(anim) = &current_animation {
-				if anim.tp.is_done() {
-					let duration = anim.tp.duration;
+			if !current_animations.is_empty() {
+				let mut anim_indices_to_remove: Vec<usize> = vec![];
+				let mut new_anims: Vec<Animation> = vec![];
+				for (anim_index, anim) in current_animations.iter().enumerate() {
+					if anim.tp.is_done() {
+						let duration = anim.tp.duration;
 
-					// The current animation is finished.
-					match current_animation.take().unwrap().action {
-						AnimationAction::Move { obj, to, .. } => {
-							map.grid.get_mut(to).unwrap().obj = Some(obj)
-						},
-						AnimationAction::CameraMoveX { to, .. } => map_drawing_config.camera_x = to,
-						AnimationAction::Appear { obj, to } => {
-							map.grid.get_mut(to).unwrap().obj = Some(obj)
-						},
-						AnimationAction::Disappear { .. } => {},
-						AnimationAction::Shoot { from, direction } => {
-							let to = from + direction;
-							if map.grid.dims.contains(to) {
-								if map.grid.get(to).unwrap().obj.is_some() {
-									map.inflict_damage_to_obj_at(to, 1);
-									audio_player.play_sound_effect(SoundEffect::Hit);
-								} else {
-									current_animation = Some(Animation {
-										action: AnimationAction::Shoot { from: to, direction },
-										tp: TimeProgression { start: Instant::now(), duration },
-									});
+						// The current animation is finished.
+						anim_indices_to_remove.push(anim_index);
+						match &anim.action {
+							AnimationAction::Move { obj, to, .. } => {
+								map.grid.get_mut(*to).unwrap().obj = Some(obj.clone())
+							},
+							AnimationAction::CameraMoveX { to, .. } => map_drawing_config.camera_x = *to,
+							AnimationAction::Appear { obj, to } => {
+								map.grid.get_mut(*to).unwrap().obj = Some(obj.clone())
+							},
+							AnimationAction::Disappear { .. } => {},
+							AnimationAction::Shoot { from, direction, shot } => {
+								let to = *from + *direction;
+								if map.grid.dims.contains(to) {
+									if map.grid.get(to).unwrap().obj.is_some() {
+										map.inflict_damage_to_obj_at(to, shot.damages);
+										audio_player.play_sound_effect(SoundEffect::Hit);
+										match &shot.cascade {
+											ShotCascade::None => {},
+											ShotCascade::SplitInTwo(side_shots) => {
+												let one_side = CoordsDelta::from((direction.dy, direction.dx));
+												new_anims.push(Animation {
+													action: AnimationAction::Shoot {
+														from: to,
+														direction: one_side,
+														shot: *(*side_shots).clone(),
+													},
+													tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+												});
+												new_anims.push(Animation {
+													action: AnimationAction::Shoot {
+														from: to,
+														direction: -one_side,
+														shot: *(*side_shots).clone(),
+													},
+													tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+												});
+												audio_player.play_sound_effect(SoundEffect::Pew);
+											},
+										}
+									} else {
+										new_anims.push(Animation {
+											action: AnimationAction::Shoot {
+												from: to,
+												direction: *direction,
+												shot: shot.clone(),
+											},
+											tp: TimeProgression { start: Instant::now(), duration },
+										});
+									}
+								}
+							},
+						}
+						if end_player_phase_after_animation {
+							end_player_phase_after_animation = false;
+							end_player_phase_right_now = false;
+							phase = Phase::Enemy;
+							for coords in map.grid.dims.iter() {
+								if let Some(Obj::Enemy { ref mut can_play, .. }) =
+									map.grid.get_mut(coords).unwrap().obj
+								{
+									*can_play = true;
 								}
 							}
-						},
-					}
-					if end_player_phase_after_animation {
-						end_player_phase_after_animation = false;
-						end_player_phase_right_now = false;
-						phase = Phase::Enemy;
-						for coords in map.grid.dims.iter() {
-							if let Some(Obj::Enemy { ref mut can_play, .. }) =
-								map.grid.get_mut(coords).unwrap().obj
-							{
-								*can_play = true;
-							}
+						}
+					} else {
+						let progress = anim.tp.progress();
+						match &anim.action {
+							AnimationAction::Move { obj, from, to } => {
+								let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
+								let dst_to = map_drawing_config.tile_coords_to_screen_rect(*to);
+								let dst = linear_interpolation_rect(progress, dst_from, dst_to);
+								draw_obj(&mut renderer, obj, dst, false);
+							},
+							AnimationAction::CameraMoveX { from, to } => {
+								map_drawing_config.camera_x = linear_interpolation(progress, *from, *to);
+								let coords =
+									map_drawing_config.screen_coords_to_tile_coords(cursor_position);
+								if map.grid.dims.contains(coords) {
+									hovered_tile_coords = Some(coords);
+								} else {
+									hovered_tile_coords = None;
+								}
+							},
+							AnimationAction::Appear { obj, to } => {
+								let mut dst = map_drawing_config.tile_coords_to_screen_rect(*to);
+								let side = map_drawing_config.tile_side();
+								dst.top_left.x += ((side / 2) as f32 * (1.0 - progress)) as i32;
+								dst.dims.w = (side as f32 * progress) as i32;
+								dst.top_left.y += ((side / 2) as f32 * (1.0 - progress)) as i32;
+								dst.dims.h = (side as f32 * progress) as i32;
+								draw_obj(&mut renderer, obj, dst, false);
+							},
+							AnimationAction::Disappear { obj, from } => {
+								let dst = map_drawing_config.tile_coords_to_screen_rect(*from);
+								draw_obj(&mut renderer, obj, dst, true);
+							},
+							AnimationAction::Shoot { from, direction, .. } => {
+								let to = *from + *direction;
+								let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
+								let dst_to = map_drawing_config.tile_coords_to_screen_rect(to);
+								let dst = linear_interpolation_rect(progress, dst_from, dst_to);
+								draw_shot(&mut renderer, dst);
+							},
 						}
 					}
-				} else {
-					let progress = anim.tp.progress();
-					match &anim.action {
-						AnimationAction::Move { obj, from, to } => {
-							let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
-							let dst_to = map_drawing_config.tile_coords_to_screen_rect(*to);
-							let dst = linear_interpolation_rect(progress, dst_from, dst_to);
-							draw_obj(&mut renderer, obj, dst, false);
-						},
-						AnimationAction::CameraMoveX { from, to } => {
-							map_drawing_config.camera_x = linear_interpolation(progress, *from, *to);
-							let coords = map_drawing_config.screen_coords_to_tile_coords(cursor_position);
-							if map.grid.dims.contains(coords) {
-								hovered_tile_coords = Some(coords);
-							} else {
-								hovered_tile_coords = None;
-							}
-						},
-						AnimationAction::Appear { obj, to } => {
-							let mut dst = map_drawing_config.tile_coords_to_screen_rect(*to);
-							let side = map_drawing_config.tile_side();
-							dst.top_left.x += ((side / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.w = (side as f32 * progress) as i32;
-							dst.top_left.y += ((side / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.h = (side as f32 * progress) as i32;
-							draw_obj(&mut renderer, obj, dst, false);
-						},
-						AnimationAction::Disappear { obj, from } => {
-							let dst = map_drawing_config.tile_coords_to_screen_rect(*from);
-							draw_obj(&mut renderer, obj, dst, true);
-						},
-						AnimationAction::Shoot { from, direction } => {
-							let to = *from + *direction;
-							let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
-							let dst_to = map_drawing_config.tile_coords_to_screen_rect(to);
-							let dst = linear_interpolation_rect(progress, dst_from, dst_to);
-							draw_shot(&mut renderer, dst);
-						},
-					}
 				}
+				for anim_index_to_remove in anim_indices_to_remove.into_iter().rev() {
+					current_animations.remove(anim_index_to_remove);
+				}
+				current_animations.extend(new_anims);
 			} else if end_player_phase_right_now {
 				end_player_phase_after_animation = false;
 				end_player_phase_right_now = false;
@@ -1326,7 +1379,7 @@ fn main() {
 										.as_ref()
 										.is_some_and(|obj| matches!(obj, Obj::Caravan | Obj::Tower { .. }))
 							}) {
-								current_animation = Some(Animation {
+								current_animations.push(Animation {
 									action: AnimationAction::Move {
 										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
 										from: coords,
@@ -1427,8 +1480,17 @@ fn main() {
 
 							if let Some((_, direction)) = min_path_dist_and_dir {
 								// Shoot!
-								current_animation = Some(Animation {
-									action: AnimationAction::Shoot { from: coords, direction },
+								// The shot here is a test for now,
+								// the basic tower isn't supposed to shoot shots like these.
+								let shot = Shot {
+									damages: 1,
+									cascade: ShotCascade::SplitInTwo(Box::new(Shot {
+										damages: 2,
+										cascade: ShotCascade::None,
+									})),
+								};
+								current_animations.push(Animation {
+									action: AnimationAction::Shoot { from: coords, direction, shot },
 									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 								});
 								audio_player.play_sound_effect(SoundEffect::Pew);
