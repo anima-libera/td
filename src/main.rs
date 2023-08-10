@@ -351,6 +351,10 @@ impl Map {
 		}
 	}
 
+	fn _draw(&self, _renderer: &mut Renderer, _config: MapDrawingConfig) {
+		todo!()
+	}
+
 	fn inflict_damage_to_obj_at(&mut self, coords: Coords, damages: i32) {
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
@@ -771,6 +775,41 @@ fn linear_interpolation_rect(progress: f32, value_start: Rect, value_end: Rect) 
 	)
 }
 
+struct MapDrawingConfig {
+	top_left: Coords,
+	/// A square tile will be drawn to a square area of side 16 * zoom.
+	zoom: i32,
+	/// The x coordinate (in the map's grid coordinate system) of the left side of the screen.
+	camera_x: f32,
+}
+
+impl MapDrawingConfig {
+	fn tile_side(&self) -> i32 {
+		self.zoom * 16
+	}
+
+	fn tile_coords_to_screen_rect(&self, tile_coords: Coords) -> Rect {
+		let dst_side = self.zoom * 16;
+		let left = -(self.camera_x * dst_side as f32) as i32;
+		Rect::xywh(
+			self.top_left.x + left + dst_side * tile_coords.x,
+			self.top_left.y + dst_side * tile_coords.y,
+			dst_side,
+			dst_side,
+		)
+	}
+
+	fn screen_coords_to_tile_coords(&self, screen_coords: Coords) -> Coords {
+		let dst_side = self.zoom * 16;
+		let left = -(self.camera_x * dst_side as f32) as i32;
+		(
+			(screen_coords.x - left - self.top_left.x) / dst_side,
+			(screen_coords.y - self.top_left.y) / dst_side,
+		)
+			.into()
+	}
+}
+
 fn main() {
 	env_logger::init();
 	let event_loop = winit::event_loop::EventLoop::new();
@@ -840,7 +879,8 @@ fn main() {
 	let mut end_player_phase_after_animation = false;
 	let mut end_player_phase_right_now = false;
 
-	let mut camera_x = 0.0;
+	let mut map_drawing_config =
+		MapDrawingConfig { top_left: (0, 180).into(), zoom: 4, camera_x: 0.0 };
 
 	let mut cursor_position = Coords::from((0, 0));
 	let mut hovered_tile_coords: Option<Coords> = None;
@@ -870,7 +910,8 @@ fn main() {
 				renderer.resized((*new_size).into());
 				window.request_redraw();
 
-				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+				while map.grid.dims.w * 8 * 8
+					<= (map_drawing_config.camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
 				{
 					map.generate_chunk_on_the_right();
 				}
@@ -878,13 +919,7 @@ fn main() {
 
 			WindowEvent::CursorMoved { position, .. } => {
 				cursor_position = (position.x.floor() as i32, position.y.floor() as i32).into();
-
-				let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
-				let map_left = -(camera_x * 8.0 * 8.0) as i32;
-				let coords = Coords::from((
-					((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
-					((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
-				));
+				let coords = map_drawing_config.screen_coords_to_tile_coords(cursor_position);
 				if map.grid.dims.contains(coords) {
 					hovered_tile_coords = Some(coords);
 				} else {
@@ -1025,10 +1060,14 @@ fn main() {
 				..
 			} if current_animation.is_none() && phase == Phase::Player => {
 				current_animation = Some(Animation {
-					action: AnimationAction::CameraMoveX { from: camera_x, to: camera_x + 1.0 },
+					action: AnimationAction::CameraMoveX {
+						from: map_drawing_config.camera_x,
+						to: map_drawing_config.camera_x + 1.0,
+					},
 					tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 				});
-				while map.grid.dims.w * 8 * 8 <= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+				while map.grid.dims.w * 8 * 8
+					<= (map_drawing_config.camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
 				{
 					map.generate_chunk_on_the_right();
 				}
@@ -1092,16 +1131,8 @@ fn main() {
 
 			renderer.clear();
 
-			let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
-			let map_left = -(camera_x * 8.0 * 8.0) as i32;
-
 			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
+				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
 					continue;
 				}
@@ -1109,31 +1140,16 @@ fn main() {
 			}
 
 			if let Some(coords) = hovered_tile_coords {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
+				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
 			}
 			if let Some(coords) = selected_tile_coords {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
+				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 255, 80));
 			}
 
 			for coords in map.grid.dims.iter() {
-				let dst = Rect::xywh(
-					map_left + 8 * 8 * coords.x,
-					map_top + 8 * 8 * coords.y,
-					8 * 8,
-					8 * 8,
-				);
+				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
 					continue;
 				}
@@ -1187,7 +1203,7 @@ fn main() {
 						AnimationAction::Move { obj, to, .. } => {
 							map.grid.get_mut(to).unwrap().obj = Some(obj)
 						},
-						AnimationAction::CameraMoveX { to, .. } => camera_x = to,
+						AnimationAction::CameraMoveX { to, .. } => map_drawing_config.camera_x = to,
 						AnimationAction::Appear { obj, to } => {
 							map.grid.get_mut(to).unwrap().obj = Some(obj)
 						},
@@ -1223,28 +1239,14 @@ fn main() {
 					let progress = anim.tp.progress();
 					match &anim.action {
 						AnimationAction::Move { obj, from, to } => {
-							let interp_x = {
-								let from_x = map_left + 8 * 8 * from.x;
-								let to_x = map_left + 8 * 8 * to.x;
-								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
-							};
-							let interp_y = {
-								let from_y = map_top + 8 * 8 * from.y;
-								let to_y = map_top + 8 * 8 * to.y;
-								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
-							};
-							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
+							let dst_to = map_drawing_config.tile_coords_to_screen_rect(*to);
+							let dst = linear_interpolation_rect(progress, dst_from, dst_to);
 							draw_obj(&mut renderer, obj, dst, false);
 						},
 						AnimationAction::CameraMoveX { from, to } => {
-							camera_x = linear_interpolation(progress, *from, *to);
-
-							let map_top = renderer.dims().h / 2 - 8 * 8 * map.grid.dims.h / 2;
-							let map_left = -(camera_x * 8.0 * 8.0) as i32;
-							let coords = Coords::from((
-								((cursor_position.x as f64 - map_left as f64) / (8.0 * 8.0)).floor() as i32,
-								((cursor_position.y as f64 - map_top as f64) / (8.0 * 8.0)).floor() as i32,
-							));
+							map_drawing_config.camera_x = linear_interpolation(progress, *from, *to);
+							let coords = map_drawing_config.screen_coords_to_tile_coords(cursor_position);
 							if map.grid.dims.contains(coords) {
 								hovered_tile_coords = Some(coords);
 							} else {
@@ -1252,40 +1254,23 @@ fn main() {
 							}
 						},
 						AnimationAction::Appear { obj, to } => {
-							let mut dst = Rect::xywh(
-								map_left + 8 * 8 * to.x,
-								map_top + 8 * 8 * to.y,
-								8 * 8,
-								8 * 8,
-							);
-							dst.top_left.x += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.w = ((8 * 8) as f32 * progress) as i32;
-							dst.top_left.y += (((8 * 8) / 2) as f32 * (1.0 - progress)) as i32;
-							dst.dims.h = ((8 * 8) as f32 * progress) as i32;
+							let mut dst = map_drawing_config.tile_coords_to_screen_rect(*to);
+							let side = map_drawing_config.tile_side();
+							dst.top_left.x += ((side / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.w = (side as f32 * progress) as i32;
+							dst.top_left.y += ((side / 2) as f32 * (1.0 - progress)) as i32;
+							dst.dims.h = (side as f32 * progress) as i32;
 							draw_obj(&mut renderer, obj, dst, false);
 						},
 						AnimationAction::Disappear { obj, from } => {
-							let dst = Rect::xywh(
-								map_left + 8 * 8 * from.x,
-								map_top + 8 * 8 * from.y,
-								8 * 8,
-								8 * 8,
-							);
+							let dst = map_drawing_config.tile_coords_to_screen_rect(*from);
 							draw_obj(&mut renderer, obj, dst, true);
 						},
 						AnimationAction::Shoot { from, direction } => {
 							let to = *from + *direction;
-							let interp_x = {
-								let from_x = map_left + 8 * 8 * from.x;
-								let to_x = map_left + 8 * 8 * to.x;
-								linear_interpolation(progress, from_x as f32, to_x as f32) as i32
-							};
-							let interp_y = {
-								let from_y = map_top + 8 * 8 * from.y;
-								let to_y = map_top + 8 * 8 * to.y;
-								linear_interpolation(progress, from_y as f32, to_y as f32) as i32
-							};
-							let dst = Rect::xywh(interp_x, interp_y, 8 * 8, 8 * 8);
+							let dst_from = map_drawing_config.tile_coords_to_screen_rect(*from);
+							let dst_to = map_drawing_config.tile_coords_to_screen_rect(to);
+							let dst = linear_interpolation_rect(progress, dst_from, dst_to);
 							draw_shot(&mut renderer, dst);
 						},
 					}
@@ -1357,13 +1342,16 @@ fn main() {
 						// We finish some enemy buisness and get to next phase.
 
 						// Enemy spawn
-						while map.grid.dims.w * 8 * 8
-							<= (camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+						let tile_side = map_drawing_config.tile_side();
+						while map.grid.dims.w * tile_side
+							<= (map_drawing_config.camera_x + 1.0) as i32 * tile_side
+								+ renderer.dims().w + 1
 						{
 							map.generate_chunk_on_the_right();
 						}
 						let spawn_coords: Coords = 'spawn_coords: {
-							let right = (camera_x + 1.0) as i32 + renderer.dims().w / (8 * 8);
+							let right =
+								(map_drawing_config.camera_x + 1.0) as i32 + renderer.dims().w / tile_side;
 							for y in 0..map.grid.dims.h {
 								if map.grid.get((right, y).into()).unwrap().has_path() {
 									break 'spawn_coords (right, y).into();
@@ -1471,12 +1459,7 @@ fn main() {
 
 			if display_path_dist {
 				for coords in map.grid.dims.iter() {
-					let dst = Rect::xywh(
-						map_left + 8 * 8 * coords.x,
-						map_top + 8 * 8 * coords.y,
-						8 * 8,
-						8 * 8,
-					);
+					let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 					if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
 						continue;
 					}
@@ -1591,7 +1574,8 @@ fn main() {
 				.unwrap();
 			}
 
-			let map_bottom = map_top + 8 * 8 * map.grid.dims.h;
+			let map_bottom =
+				map_drawing_config.top_left.y + map_drawing_config.tile_side() * map.grid.dims.h;
 			if let Some(coords) = hovered_tile_coords {
 				let tile = map.grid.get(coords).unwrap();
 				let dst = Rect::xywh(10, map_bottom + 10, 8 * 8 * 2, 8 * 8 * 2);
