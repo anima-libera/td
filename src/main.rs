@@ -1590,7 +1590,7 @@ fn main() {
 					.draw_text_line(
 						&mut renderer,
 						&format!("{crystal_amount}"),
-						(0, 30).into(),
+						(10, 30).into(),
 						PinPoint::TOP_LEFT,
 					)
 					.unwrap();
@@ -1611,7 +1611,7 @@ fn main() {
 				.draw_text_line(
 					&mut renderer,
 					&format!("turn {turn_counter}"),
-					(0, 60).into(),
+					(10, 60).into(),
 					PinPoint::TOP_LEFT,
 				)
 				.unwrap();
@@ -1619,7 +1619,7 @@ fn main() {
 				.draw_text_line(
 					&mut renderer,
 					&format!("traveled {distance_traveled} tiles"),
-					(0, 80).into(),
+					(10, 80).into(),
 					PinPoint::TOP_LEFT,
 				)
 				.unwrap();
@@ -1639,7 +1639,7 @@ fn main() {
 							Phase::Tower => "tower phase",
 							_ => panic!("should not be here then"),
 						},
-						(0, 110).into(),
+						(10, 110).into(),
 						PinPoint::TOP_LEFT,
 					)
 					.unwrap();
@@ -1655,7 +1655,7 @@ fn main() {
 				.draw_text_line(
 					&mut renderer,
 					"game over >_<",
-					(0, 110).into(),
+					(10, 110).into(),
 					PinPoint::TOP_LEFT,
 				)
 				.unwrap();
@@ -1663,7 +1663,9 @@ fn main() {
 
 			let map_bottom =
 				map_drawing_config.top_left.y + map_drawing_config.tile_side() * map.grid.dims.h;
-			if let Some(coords) = hovered_tile_coords {
+
+			let coords_to_display = hovered_tile_coords.or(selected_tile_coords);
+			if let Some(coords) = coords_to_display {
 				let tile = map.grid.get(coords).unwrap();
 				let dst = Rect::xywh(10, map_bottom + 10, 8 * 8 * 2, 8 * 8 * 2);
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
