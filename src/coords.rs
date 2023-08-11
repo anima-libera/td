@@ -274,7 +274,7 @@ impl Rect {
 		IterCoordsRect::new(self, IterCoordsRectOrder::TopToBottomThenLeftToRight)
 	}
 
-	pub fn _add_margin(self, margin: i32) -> Rect {
+	pub fn add_margin(self, margin: i32) -> Rect {
 		Rect {
 			top_left: self.top_left - CoordsDelta::from((margin, margin)),
 			dims: self.dims + (margin * 2, margin * 2).into(),

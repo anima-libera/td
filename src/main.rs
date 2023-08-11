@@ -403,6 +403,36 @@ impl Map {
 		None
 	}
 
+	fn caradan_path_dist(&self) -> Option<i32> {
+		self
+			.caravan_coords_and_tile()
+			.map(|(_coords, tile)| tile.path().unwrap().distance)
+	}
+
+	fn path_coords(&self) -> Vec<Coords> {
+		let left_path_y = 'finding_left_path_y: {
+			for y in 0..self.grid.dims.h {
+				if self
+					.grid
+					.get((0, y).into())
+					.unwrap()
+					.path()
+					.is_some_and(|path| path.distance == 0)
+				{
+					break 'finding_left_path_y y;
+				}
+			}
+			panic!("No path tile with distance 0 on the left side found");
+		};
+		let mut path_coords = vec![];
+		let mut head: Coords = (0, left_path_y).into();
+		while let Some(path) = self.grid.get(head).and_then(|tile| tile.path()) {
+			path_coords.push(head);
+			head += path.forward;
+		}
+		path_coords
+	}
+
 	fn rightmost_path_y_and_dist(&self) -> Option<(i32, i32)> {
 		if self.grid.dims.w == 0 {
 			return None;
@@ -922,6 +952,8 @@ fn main() {
 	let mut hovered_tile_coords: Option<Coords> = None;
 	let mut selected_tile_coords: Option<Coords> = None;
 
+	let mut selectable_tile_coords: Vec<Coords> = vec![];
+
 	let mut display_path_dist = false;
 
 	let mut last_time = std::time::Instant::now();
@@ -1027,9 +1059,29 @@ fn main() {
 						&& interface_mode == InterfaceMode::Normal
 					{
 						interface_mode = InterfaceMode::MovingCaravanChoosingDst;
+						// Make selectable the tiles on which the caravan can move.
+						let path_coords = map.path_coords();
+						let caravan_path_dist = map.caradan_path_dist().unwrap();
+						for coords in path_coords {
+							let path = map.grid.get(coords).unwrap().path().unwrap();
+							if path.distance <= caravan_path_dist {
+								continue;
+							}
+							if map
+								.grid
+								.get(coords)
+								.unwrap()
+								.obj
+								.as_ref()
+								.is_some_and(|obj| !matches!(obj, Obj::Caravan))
+							{
+								break;
+							}
+							selectable_tile_coords.push(coords);
+						}
 					}
 				} else if interface_mode == InterfaceMode::MovingCaravanChoosingDst
-					&& hovered_tile_coords.is_some()
+					&& hovered_tile_coords.is_some_and(|coords| selectable_tile_coords.contains(&coords))
 				{
 					let dst_tile = map.grid.get(hovered_tile_coords.unwrap()).unwrap().clone();
 					let dst_dist = dst_tile.path().unwrap().distance;
@@ -1043,10 +1095,13 @@ fn main() {
 					let move_dist = dst_dist - src_dist;
 					interface_mode =
 						InterfaceMode::MovingCaravanAnimation { remaining_moves: move_dist };
+					selectable_tile_coords.clear();
 				} else if interface_mode == InterfaceMode::Normal {
 					selected_tile_coords = hovered_tile_coords;
+					selectable_tile_coords.clear();
 				} else {
 					interface_mode = InterfaceMode::Normal;
+					selectable_tile_coords.clear();
 				}
 			},
 
@@ -1056,6 +1111,7 @@ fn main() {
 				..
 			} => {
 				selected_tile_coords = None;
+				selectable_tile_coords.clear();
 			},
 
 			WindowEvent::KeyboardInput {
@@ -1150,7 +1206,7 @@ fn main() {
 
 			//std::thread::sleep(Duration::from_secs_f32(0.003));
 
-			// Enemy alive animations.
+			// Trigger some enemy alive animations at random.
 			for coords in map.grid.dims.iter() {
 				if let Some(Obj::Enemy { alive_animation, .. }) =
 					&mut map.grid.get_mut(coords).unwrap().obj
@@ -1170,8 +1226,10 @@ fn main() {
 				}
 			}
 
+			// Here comes the rendering of the map and interface.
 			renderer.clear();
 
+			// Drawing the ground of the tiles first so that objects can't ever appear behind ground.
 			for coords in map.grid.dims.iter() {
 				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
@@ -1180,15 +1238,35 @@ fn main() {
 				map.draw_tile_ground_at(&mut renderer, coords, dst);
 			}
 
+			// Draw the selection/hover/selectable rectangles and related stuff.
 			if let Some(coords) = hovered_tile_coords {
-				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
-				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
+				if selectable_tile_coords.contains(&coords) {
+					let dst = map_drawing_config
+						.tile_coords_to_screen_rect(coords)
+						.add_margin(1);
+					renderer.draw_rect_edge(dst, Color::rgb_u8(0, 100, 255));
+				} else {
+					let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
+					renderer.draw_rect_edge(dst, Color::rgb_u8(255, 60, 0));
+				}
 			}
 			if let Some(coords) = selected_tile_coords {
-				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
+				let dst = map_drawing_config
+					.tile_coords_to_screen_rect(coords)
+					.add_margin(2);
 				renderer.draw_rect_edge(dst, Color::rgb_u8(255, 255, 80));
 			}
+			for coords in selectable_tile_coords.iter() {
+				if matches!(hovered_tile_coords, Some(hovered) if hovered == *coords) {
+					continue;
+				}
+				let dst = map_drawing_config
+					.tile_coords_to_screen_rect(*coords)
+					.add_margin(-1);
+				renderer.draw_rect_edge(dst, Color::rgb_u8(0, 100, 255));
+			}
 
+			// Now the objects that are not in animations.
 			for coords in map.grid.dims.iter() {
 				let dst = map_drawing_config.tile_coords_to_screen_rect(coords);
 				if dst.right_excluded() < 0 || renderer.dims().w < dst.left() {
@@ -1298,6 +1376,7 @@ fn main() {
 						if end_player_phase_after_animation {
 							end_player_phase_after_animation = false;
 							end_player_phase_right_now = false;
+							selectable_tile_coords.clear();
 							phase = Phase::Enemy;
 							for coords in map.grid.dims.iter() {
 								if let Some(Obj::Enemy { ref mut can_play, .. }) =
@@ -1356,6 +1435,7 @@ fn main() {
 			} else if end_player_phase_right_now {
 				end_player_phase_after_animation = false;
 				end_player_phase_right_now = false;
+				selectable_tile_coords.clear();
 				phase = Phase::Enemy;
 				for coords in map.grid.dims.iter() {
 					if let Some(Obj::Enemy { ref mut can_play, .. }) =
