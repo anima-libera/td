@@ -160,6 +160,54 @@ impl TimeProgression {
 #[derive(Clone)]
 enum Tower {
 	Basic,
+	Pink,
+	Blue,
+}
+impl Tower {
+	fn initial_hp(&self) -> i32 {
+		match self {
+			Tower::Basic => 3,
+			Tower::Pink => 4,
+			Tower::Blue => 3,
+		}
+	}
+	fn shot(&self) -> Shot {
+		match self {
+			Tower::Basic => Shot {
+				damages: 1,
+				fire: 0,
+				additional_actions: 0,
+				cascade: ShotCascade::None,
+			},
+			Tower::Pink => Shot {
+				damages: -1,
+				fire: 0,
+				additional_actions: 0,
+				cascade: ShotCascade::SplitInTwo(Box::new(Shot {
+					damages: 3,
+					fire: 0,
+					additional_actions: 0,
+					cascade: ShotCascade::None,
+				})),
+			},
+			Tower::Blue => Shot {
+				damages: 0,
+				additional_actions: 2,
+				fire: 0,
+				cascade: ShotCascade::Piercing(Box::new(Shot {
+					damages: 1,
+					additional_actions: 0,
+					fire: 0,
+					cascade: ShotCascade::Piercing(Box::new(Shot {
+						damages: 0,
+						additional_actions: 0,
+						fire: 4,
+						cascade: ShotCascade::None,
+					})),
+				})),
+			},
+		}
+	}
 }
 
 #[derive(Clone)]
@@ -177,18 +225,19 @@ enum Obj {
 	},
 	Crystal,
 	Enemy {
-		can_play: bool,
+		actions: i32,
 		hp: i32,
+		fire: i32,
 		alive_animation: Option<AliveAnimation>,
 		colored_animation: Option<ColoredAnimation>,
 		#[allow(dead_code)] // It will be used pretty soon!
 		variant: Enemy,
 	},
 	Tower {
-		can_play: bool,
+		actions: i32,
 		hp: i32,
+		fire: i32,
 		colored_animation: Option<ColoredAnimation>,
-		#[allow(dead_code)] // It will be used pretty soon!
 		variant: Tower,
 	},
 }
@@ -367,14 +416,61 @@ impl Map {
 		todo!()
 	}
 
+	fn shot_hits_obj_at(&mut self, coords: Coords, shot: &Shot) {
+		self.inflict_damage_to_obj_at(coords, shot.damages);
+		if shot.fire > 0 {
+			match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
+				Some(Obj::Enemy { ref mut fire, ref mut colored_animation, .. }) => {
+					*fire += shot.fire;
+					*colored_animation = Some(ColoredAnimation {
+						tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
+						color: Color::rgb_u8(255, 180, 0),
+					});
+				},
+				Some(Obj::Tower { ref mut fire, ref mut colored_animation, .. }) => {
+					*fire += shot.fire;
+					*colored_animation = Some(ColoredAnimation {
+						tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
+						color: Color::rgb_u8(255, 180, 0),
+					});
+				},
+				_ => {},
+			};
+		}
+		if shot.additional_actions > 0 {
+			match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
+				Some(Obj::Enemy { ref mut actions, ref mut colored_animation, .. }) => {
+					*actions += shot.additional_actions;
+					*colored_animation = Some(ColoredAnimation {
+						tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
+						color: Color::rgb_u8(255, 255, 0),
+					});
+				},
+				Some(Obj::Tower { ref mut actions, ref mut colored_animation, .. }) => {
+					*actions += shot.additional_actions;
+					*colored_animation = Some(ColoredAnimation {
+						tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
+						color: Color::rgb_u8(255, 255, 0),
+					});
+				},
+				_ => {},
+			};
+		}
+	}
+
 	fn inflict_damage_to_obj_at(&mut self, coords: Coords, damages: i32) {
+		let color = if damages < 0 {
+			Color::rgb_u8(255, 150, 150)
+		} else {
+			Color::rgb_u8(255, 0, 0)
+		};
 		let destroy = match self.grid.get_mut(coords).and_then(|tile| tile.obj.as_mut()) {
 			None => false,
 			Some(Obj::Enemy { ref mut hp, ref mut colored_animation, .. }) => {
 				*hp -= damages;
 				*colored_animation = Some(ColoredAnimation {
 					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
-					color: Color::rgb_u8(255, 0, 0),
+					color,
 				});
 				*hp <= 0
 			},
@@ -382,7 +478,7 @@ impl Map {
 				*hp -= damages;
 				*colored_animation = Some(ColoredAnimation {
 					tp: TimeProgression::new(Duration::from_secs_f32(0.075)),
-					color: Color::rgb_u8(255, 0, 0),
+					color,
 				});
 				*hp <= 0
 			},
@@ -491,7 +587,8 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect, disappearing: boo
 			dst.top_left.y -= dst.dims.h / 16;
 			renderer.draw_sprite(dst, sprite, effects);
 		},
-		Obj::Enemy { hp, alive_animation, colored_animation, .. } => {
+		Obj::Enemy { actions, hp, fire, alive_animation, colored_animation, .. } => {
+			let initial_dst = dst;
 			let sprite = Rect::tile((4, 8).into(), 16);
 			dst.top_left.y -= dst.dims.h * 3 / 16;
 			let unsquished_dst = dst;
@@ -548,11 +645,131 @@ fn draw_obj(renderer: &mut Renderer, obj: &Obj, mut dst: Rect, disappearing: boo
 			}
 			.draw_text_line(renderer, &format!("{hp}"), top_center, PinPoint::TOP_CENTER)
 			.unwrap();
+
+			// Draw fire and action counter in the back.
+			if *fire >= 1 {
+				let sprite = Rect::xywh(22, 17, 6, 6);
+				let fire_dst = Rect {
+					top_left: initial_dst.top_left + CoordsDelta::from((-4, 4)),
+					dims: sprite.dims * (initial_dst.dims.w / 16),
+				};
+				renderer.draw_sprite(fire_dst, sprite, DrawSpriteEffects::none());
+				if *fire >= 2 {
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(255, 0, 0),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						renderer,
+						&format!("{fire}"),
+						(fire_dst.left(), fire_dst.top() + fire_dst.dims.h / 2).into(),
+						PinPoint::CENTER_RIGHT,
+					)
+					.unwrap();
+				}
+			}
+			if *actions >= 1 {
+				let sprite = Rect::xywh(1, 17, 6, 6);
+				let dims = sprite.dims * (initial_dst.dims.w / 16);
+				let actions_dst = Rect {
+					top_left: initial_dst.top_left
+						+ CoordsDelta::from((-4, initial_dst.dims.h - 4 - dims.h)),
+					dims: sprite.dims * (initial_dst.dims.w / 16),
+				};
+				renderer.draw_sprite(actions_dst, sprite, DrawSpriteEffects::none());
+				if *actions >= 2 {
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(255, 255, 0),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						renderer,
+						&format!("{actions}"),
+						(
+							actions_dst.left(),
+							actions_dst.top() + actions_dst.dims.h / 2,
+						)
+							.into(),
+						PinPoint::CENTER_RIGHT,
+					)
+					.unwrap();
+				}
+			}
 		},
-		Obj::Tower { .. } => {
-			let sprite = Rect::tile((8, 4).into(), 16);
+		Obj::Tower { actions, fire, variant, .. } => {
+			let sprite_x = match variant {
+				Tower::Basic => 8,
+				Tower::Pink => 9,
+				Tower::Blue => 10,
+			};
+			let sprite = Rect::tile((sprite_x, 4).into(), 16);
 			dst.top_left.y -= dst.dims.h * 2 / 16;
 			renderer.draw_sprite(dst, sprite, effects);
+
+			// Draw fire and action counter in the front.
+			if *fire >= 1 {
+				let sprite = Rect::xywh(22, 17, 6, 6);
+				let fire_dst = Rect {
+					top_left: dst.top_left + CoordsDelta::from((-4, 4)),
+					dims: sprite.dims * (dst.dims.w / 16),
+				};
+				renderer.draw_sprite(fire_dst, sprite, DrawSpriteEffects::none());
+				if *fire >= 2 {
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(255, 0, 0),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						renderer,
+						&format!("{fire}"),
+						(fire_dst.left(), fire_dst.top() + fire_dst.dims.h / 2).into(),
+						PinPoint::CENTER_RIGHT,
+					)
+					.unwrap();
+				}
+			}
+			if *actions >= 1 {
+				let sprite = Rect::xywh(1, 17, 6, 6);
+				let dims = sprite.dims * (dst.dims.w / 16);
+				let actions_dst = Rect {
+					top_left: dst.top_left + CoordsDelta::from((-4, dst.dims.h - 4 - dims.h)),
+					dims: sprite.dims * (dst.dims.w / 16),
+				};
+				renderer.draw_sprite(actions_dst, sprite, DrawSpriteEffects::none());
+				if *actions >= 2 {
+					Font {
+						size_factor: 3,
+						horizontal_spacing: 2,
+						space_width: 7,
+						foreground: Color::rgb_u8(255, 255, 0),
+						background: Some(Color::BLACK),
+						margins: (3, 3).into(),
+					}
+					.draw_text_line(
+						renderer,
+						&format!("{actions}"),
+						(
+							actions_dst.left(),
+							actions_dst.top() + actions_dst.dims.h / 2,
+						)
+							.into(),
+						PinPoint::CENTER_RIGHT,
+					)
+					.unwrap();
+				}
+			}
 		},
 	}
 }
@@ -753,8 +970,9 @@ impl Chunk {
 				let enemy_probability = 0.4;
 				if rand_range(0.0..1.0) < enemy_probability {
 					tile.obj = Some(Obj::Enemy {
-						can_play: false,
+						actions: 0,
 						hp: 8,
+						fire: 0,
 						alive_animation: None,
 						colored_animation: None,
 						variant: Enemy::Basic,
@@ -773,12 +991,15 @@ impl Chunk {
 #[derive(Clone)]
 enum ShotCascade {
 	None,
+	Piercing(Box<Shot>),
 	SplitInTwo(Box<Shot>),
 }
 
 #[derive(Clone)]
 struct Shot {
 	damages: i32,
+	fire: i32,
+	additional_actions: i32,
 	cascade: ShotCascade,
 }
 
@@ -954,6 +1175,8 @@ fn main() {
 
 	let mut selectable_tile_coords: Vec<Coords> = vec![];
 
+	let mut tower_type_to_place = Tower::Basic;
+
 	let mut display_path_dist = false;
 
 	let mut last_time = std::time::Instant::now();
@@ -1021,10 +1244,11 @@ fn main() {
 						current_animations.push(Animation {
 							action: AnimationAction::Appear {
 								obj: Obj::Tower {
-									can_play: false,
-									hp: 3,
+									actions: 0,
+									hp: tower_type_to_place.initial_hp(),
+									fire: 0,
 									colored_animation: None,
-									variant: Tower::Basic,
+									variant: tower_type_to_place.clone(),
 								},
 								to: selected_tile_coords.unwrap(),
 							},
@@ -1163,8 +1387,9 @@ fn main() {
 					},
 					tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
 				});
-				while map.grid.dims.w * 8 * 8
-					<= (map_drawing_config.camera_x + 1.0) as i32 * 8 * 8 + renderer.dims().w + 1
+				let side = map_drawing_config.tile_side();
+				while map.grid.dims.w * side
+					<= (map_drawing_config.camera_x + 1.0) as i32 * side + renderer.dims().w + 1
 				{
 					map.generate_chunk_on_the_right();
 				}
@@ -1181,6 +1406,22 @@ fn main() {
 				..
 			} if current_animations.is_empty() && phase == Phase::Player => {
 				end_player_phase_right_now = true;
+			},
+
+			WindowEvent::KeyboardInput {
+				input:
+					KeyboardInput {
+						state: ElementState::Pressed,
+						virtual_keycode: Some(VirtualKeyCode::T),
+						..
+					},
+				..
+			} => {
+				tower_type_to_place = match tower_type_to_place {
+					Tower::Basic => Tower::Pink,
+					Tower::Pink => Tower::Blue,
+					Tower::Blue => Tower::Basic,
+				};
 			},
 
 			WindowEvent::KeyboardInput {
@@ -1335,10 +1576,21 @@ fn main() {
 								let to = *from + *direction;
 								if map.grid.dims.contains(to) {
 									if map.grid.get(to).unwrap().obj.is_some() {
-										map.inflict_damage_to_obj_at(to, shot.damages);
+										map.shot_hits_obj_at(to, shot);
 										audio_player.play_sound_effect(SoundEffect::Hit);
 										match &shot.cascade {
 											ShotCascade::None => {},
+											ShotCascade::Piercing(piercing_shot) => {
+												new_anims.push(Animation {
+													action: AnimationAction::Shoot {
+														from: to,
+														direction: *direction,
+														shot: *(*piercing_shot).clone(),
+													},
+													tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+												});
+												audio_player.play_sound_effect(SoundEffect::Pew);
+											},
 											ShotCascade::SplitInTwo(side_shots) => {
 												let one_side = CoordsDelta::from((direction.dy, direction.dx));
 												new_anims.push(Animation {
@@ -1379,10 +1631,10 @@ fn main() {
 							selectable_tile_coords.clear();
 							phase = Phase::Enemy;
 							for coords in map.grid.dims.iter() {
-								if let Some(Obj::Enemy { ref mut can_play, .. }) =
+								if let Some(Obj::Enemy { ref mut actions, .. }) =
 									map.grid.get_mut(coords).unwrap().obj
 								{
-									*can_play = true;
+									*actions += 1;
 								}
 							}
 						}
@@ -1438,10 +1690,10 @@ fn main() {
 				selectable_tile_coords.clear();
 				phase = Phase::Enemy;
 				for coords in map.grid.dims.iter() {
-					if let Some(Obj::Enemy { ref mut can_play, .. }) =
+					if let Some(Obj::Enemy { ref mut actions, .. }) =
 						map.grid.get_mut(coords).unwrap().obj
 					{
-						*can_play = true;
+						*actions += 1;
 					}
 				}
 			} else {
@@ -1455,44 +1707,59 @@ fn main() {
 					let mut min_path_dist_and_coords: Option<(i32, Coords)> = None;
 					for coords in map.grid.dims.iter() {
 						let tile = map.grid.get(coords).unwrap();
-						if let Some(Obj::Enemy { can_play: true, .. }) = tile.obj {
-							if let Some(Path { distance, .. }) = tile.path() {
-								if min_path_dist_and_coords.is_none()
-									|| min_path_dist_and_coords
-										.is_some_and(|(dist_min, _)| *distance < dist_min)
-								{
-									min_path_dist_and_coords = Some((*distance, coords));
+						if let Some(Obj::Enemy { actions, .. }) = tile.obj {
+							if actions >= 1 {
+								if let Some(Path { distance, .. }) = tile.path() {
+									if min_path_dist_and_coords.is_none()
+										|| min_path_dist_and_coords
+											.is_some_and(|(dist_min, _)| *distance < dist_min)
+									{
+										min_path_dist_and_coords = Some((*distance, coords));
+									}
 								}
 							}
 						}
 					}
 					if let Some((_, coords)) = min_path_dist_and_coords {
 						// Found the closest enemy that hasn't played yet. This enemy plays now.
+						// But before playing, we handle fire effect (if any).
+						if let Obj::Enemy { actions, ref mut fire, .. } =
+							map.grid.get_mut(coords).unwrap().obj.as_mut().unwrap()
+						{
+							if *actions >= 1 && *fire >= 1 {
+								*fire -= 1;
+								map.inflict_damage_to_obj_at(coords, 1);
+								audio_player.play_sound_effect(SoundEffect::Hit);
+							}
+						}
 						let tile = map.grid.get_mut(coords).unwrap();
-						if let Some(Obj::Enemy { can_play: ref mut can_play @ true, .. }) = tile.obj {
-							*can_play = false;
-							let backward = if let Some(Path { backward, .. }) = tile.path() {
-								*backward
-							} else {
-								panic!("enemy not on a path")
-							};
-							let dst_coords = coords + backward;
-							if map.grid.get(dst_coords).is_some_and(|dst_tile| {
-								dst_tile.obj.is_none()
-									|| dst_tile
-										.obj
-										.as_ref()
-										.is_some_and(|obj| matches!(obj, Obj::Caravan | Obj::Tower { .. }))
-							}) {
-								current_animations.push(Animation {
-									action: AnimationAction::Move {
-										obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
-										from: coords,
-										to: dst_coords,
-									},
-									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-								});
-								audio_player.play_sound_effect(SoundEffect::Step);
+						if let Some(Obj::Enemy { ref mut actions, .. }) = tile.obj {
+							if *actions >= 1 {
+								// Now the enemy really plays.
+								*actions -= 1;
+								let backward = if let Some(Path { backward, .. }) = tile.path() {
+									*backward
+								} else {
+									panic!("enemy not on a path")
+								};
+								let dst_coords = coords + backward;
+								if map.grid.get(dst_coords).is_some_and(|dst_tile| {
+									dst_tile.obj.is_none()
+										|| dst_tile
+											.obj
+											.as_ref()
+											.is_some_and(|obj| matches!(obj, Obj::Caravan | Obj::Tower { .. }))
+								}) {
+									current_animations.push(Animation {
+										action: AnimationAction::Move {
+											obj: map.grid.get_mut(coords).unwrap().obj.take().unwrap(),
+											from: coords,
+											to: dst_coords,
+										},
+										tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+									});
+									audio_player.play_sound_effect(SoundEffect::Step);
+								}
 							}
 						}
 					} else {
@@ -1528,8 +1795,9 @@ fn main() {
 								8
 							};
 							spawn_tile.obj = Some(Obj::Enemy {
-								can_play: false,
+								actions: 0,
 								hp,
+								fire: 0,
 								alive_animation: None,
 								colored_animation: None,
 								variant: Enemy::Basic,
@@ -1539,10 +1807,10 @@ fn main() {
 						// Get to next phase
 						phase = Phase::Tower;
 						for coords in map.grid.dims.iter() {
-							if let Some(Obj::Tower { ref mut can_play, .. }) =
+							if let Some(Obj::Tower { ref mut actions, .. }) =
 								map.grid.get_mut(coords).unwrap().obj
 							{
-								*can_play = true;
+								*actions += 1;
 							}
 						}
 					}
@@ -1550,59 +1818,65 @@ fn main() {
 					// Towers gonna shoot!
 					let mut found_an_tower_to_make_play = false;
 					for coords in map.grid.dims.iter_left_to_right() {
+						// Before playing, we handle fire effect (if any).
+						if let Some(Obj::Tower { actions, ref mut fire, .. }) =
+							map.grid.get_mut(coords).unwrap().obj.as_mut()
+						{
+							if *actions >= 1 && *fire >= 1 {
+								*fire -= 1;
+								map.inflict_damage_to_obj_at(coords, 1);
+								audio_player.play_sound_effect(SoundEffect::Hit);
+							}
+						}
 						let tile = map.grid.get_mut(coords).unwrap();
-						if let Some(Obj::Tower { can_play: ref mut can_play @ true, .. }) = tile.obj {
-							*can_play = false;
+						if let Some(Obj::Tower { ref mut actions, ref variant, .. }) = tile.obj {
+							if *actions >= 1 {
+								*actions -= 1;
+								let shot = variant.shot();
 
-							// Towers will shoot at the enemy that they see that is the closest to
-							// the caravan, it seems like a nice default heuristic.
-							let mut min_path_dist_and_dir: Option<(i32, CoordsDelta)> = None;
-							for direction in CoordsDelta::iter_4_directions() {
-								let mut view_coords = coords + direction;
-								loop {
-									let tile = map.grid.get(view_coords);
-									if tile.is_none() {
-										break;
-									}
-									let tile = tile.unwrap();
-									if tile.has_enemy() {
-										if let Some(Path { distance, .. }) = tile.path() {
-											if min_path_dist_and_dir.is_none()
-												|| min_path_dist_and_dir
-													.is_some_and(|(dist_min, _)| *distance < dist_min)
-											{
-												min_path_dist_and_dir = Some((*distance, direction));
-												break;
+								// Towers will shoot at the enemy that they see that is the closest to
+								// the caravan, it seems like a nice default heuristic.
+								let mut min_path_dist_and_dir: Option<(i32, CoordsDelta)> = None;
+								for direction in CoordsDelta::iter_4_directions() {
+									let mut view_coords = coords + direction;
+									loop {
+										let tile = map.grid.get(view_coords);
+										if tile.is_none() {
+											break;
+										}
+										let tile = tile.unwrap();
+										if tile.has_enemy() {
+											if let Some(Path { distance, .. }) = tile.path() {
+												if min_path_dist_and_dir.is_none()
+													|| min_path_dist_and_dir
+														.is_some_and(|(dist_min, _)| *distance < dist_min)
+												{
+													min_path_dist_and_dir = Some((*distance, direction));
+													break;
+												}
 											}
 										}
+										if tile.obj.is_some() {
+											break;
+										}
+										view_coords += direction;
 									}
-									if tile.obj.is_some() {
-										break;
-									}
-									view_coords += direction;
 								}
-							}
 
-							if let Some((_, direction)) = min_path_dist_and_dir {
-								// Shoot!
-								// The shot here is a test for now,
-								// the basic tower isn't supposed to shoot shots like these.
-								let shot = Shot {
-									damages: 1,
-									cascade: ShotCascade::SplitInTwo(Box::new(Shot {
-										damages: 2,
-										cascade: ShotCascade::None,
-									})),
-								};
-								current_animations.push(Animation {
-									action: AnimationAction::Shoot { from: coords, direction, shot },
-									tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
-								});
-								audio_player.play_sound_effect(SoundEffect::Pew);
-							}
+								if let Some((_, direction)) = min_path_dist_and_dir {
+									// Shoot!
+									// The shot here is a test for now,
+									// the basic tower isn't supposed to shoot shots like these.
+									current_animations.push(Animation {
+										action: AnimationAction::Shoot { from: coords, direction, shot },
+										tp: TimeProgression::new(Duration::from_secs_f32(0.05)),
+									});
+									audio_player.play_sound_effect(SoundEffect::Pew);
+								}
 
-							found_an_tower_to_make_play = true;
-							break;
+								found_an_tower_to_make_play = true;
+								break;
+							}
 						}
 					}
 					if !found_an_tower_to_make_play {
@@ -1682,7 +1956,7 @@ fn main() {
 				);
 				renderer.draw_sprite(
 					crystal_symbol_dst,
-					Rect::xywh(0, 23, 6, 6),
+					Rect::xywh(1, 24, 6, 6),
 					DrawSpriteEffects::none(),
 				);
 			}
@@ -1758,6 +2032,8 @@ fn main() {
 					Obj::Rock { .. } => "rock",
 					Obj::Tower { variant, .. } => match variant {
 						Tower::Basic => "basic tower",
+						Tower::Pink => "pink tower",
+						Tower::Blue => "blue tower",
 					},
 					Obj::Tree => "tree",
 					Obj::Crystal => "crystal",
