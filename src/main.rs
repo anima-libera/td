@@ -1087,11 +1087,11 @@ impl MapDrawingConfig {
 	}
 
 	fn screen_coords_to_tile_coords(&self, screen_coords: Coords) -> Coords {
-		let dst_side = self.zoom * 16;
-		let left = -(self.camera_x * dst_side as f32) as i32;
+		let dst_side = (self.zoom * 16) as f32;
+		let left = -self.camera_x * dst_side;
 		(
-			(screen_coords.x - left - self.top_left.x) / dst_side,
-			(screen_coords.y - self.top_left.y) / dst_side,
+			((screen_coords.x as f32 - left - self.top_left.x as f32) / dst_side).floor() as i32,
+			((screen_coords.y as f32 - self.top_left.y as f32) / dst_side).floor() as i32,
 		)
 			.into()
 	}
